@@ -2275,7 +2275,7 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
       : [
           v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.by})` : ''}` : 'Auto picks the effort for each message',
           v.current?.why ? `Why: ${v.current.why}` : '',
-          `Lean: ${['much cheaper', 'cheaper', 'as the judge says', 'smarter', 'much smarter'][config.bias + 2]} · range ${config.floor} to ${config.ceiling}`,
+          `Lean: ${['much cheaper', 'cheaper', 'as the judge says', 'smarter', 'much smarter'][config.bias + 2]} · range ${config.floor} to ${EFFORTS[Math.max(EFFORTS.indexOf(config.floor), EFFORTS.indexOf(ceilingFor(v.modelNow ?? undefined)))]}`,
         ]
           .filter(Boolean)
           .join(' · ')
@@ -4323,8 +4323,9 @@ Saved to ${out}.md and .json` }
       if (p.by === 'manual') return yield* send(e)
       const floor = helperFloor(config.floor, ceilingFor(keyOf(e.model)))
       const raised = EFFORTS.indexOf(p.effort) < EFFORTS.indexOf(floor) ? floor : p.effort
-      // A named level runs past Max on helpers too; Auto's pick stays within the helper's own model's Max.
-      const effort = p.by === 'named' ? raised : helperCapped(raised, e.model)
+      // A named level runs past Max on helpers too; Auto's pick stays within the helper's own model's range. This follows
+      // the turn, so Min wins over a lower Max here as it does for the turn (only a helper judged on its own keeps Max).
+      const effort = p.by === 'named' ? raised : modelCapped(raised, e.model)
       if (e.index === 0) void proof($, `subagent ${e.agentId} (${e.model}): effort ${e.effort ?? 'none'} -> ${effort}, the turn's`)
       return yield* send({ ...e, effort })
     }
@@ -4654,7 +4655,7 @@ Saved to ${out}.md and .json` }
       const hidden = (draft.hide ?? config.hide.join(',')).split(',').filter(Boolean)
       const judgeName = shown.judge === 'haiku' ? 'Haiku' : hasKey || shown.judge === 'jev' ? 'Haiku + Jev' : 'Haiku'
       const summaries: Record<SettingsCard, string> = {
-        effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.fableCeiling !== 'same' ? ` · Fable to ${shown.fableCeiling}` : ''}${shown.helpers === 'on' ? ' · helpers' : ''}`,
+        effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.fableCeiling !== 'same' ? ` · Fable to ${EFFORTS[Math.max(EFFORTS.indexOf(shown.floor), EFFORTS.indexOf(shown.fableCeiling))]}` : ''}${shown.helpers === 'on' ? ' · helpers' : ''}`,
         model: shown.modelAuto === 'on' ? 'Cheaper when it can' : "Always the chat's",
         judge: tested && tested.ok !== null ? `${judgeName} · ${tested.ok ? 'working' : 'failing'}` : judgeName,
         handoff: `${shown.handoffSkill ? `/${shown.handoffSkill}` : 'Built in'} · compact alert at ${shown.swampAt}%`,
@@ -4701,8 +4702,9 @@ Saved to ${out}.md and .json` }
       )
       // The terminal's dropdown opens its list inside the wrapping row, which jumps the layout and is hard to click.
       // There a short list is a row of buttons, the picked one boxed; a long one (the skills) stays a dropdown.
-      type Pick = { key: string; label?: string; value: string; options: { value: string; label: string }[]; onSelect: (v: string) => unknown }
-      const pick = (p: Pick) => term && p.options.length <= 6 ? (
+      // row: a row of buttons in the terminal whatever its length (Fable max has six short choices).
+      type Pick = { key: string; label?: string; value: string; options: { value: string; label: string }[]; onSelect: (v: string) => unknown; row?: boolean }
+      const pick = (p: Pick) => term && (p.options.length <= 5 || p.row) ? (
         <Box key={p.key} width="100%" flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center">
           {p.label ? <Text key={`${p.key}-label`} dimColor>{p.label}</Text> : null}
           {p.options.map(o => o.value === p.value ? (
@@ -4871,7 +4873,7 @@ Saved to ${out}.md and .json` }
                   pick({ key: "settings-floor", label: "Min", value: shown.floor, options: opts(EFFORTS), onSelect: set('floor') }),
                   pick({ key: "settings-ceiling", label: "Max", value: shown.ceiling, options: opts(EFFORTS), onSelect: set('ceiling') }),
                   // Fable's own Max: same follows the Max above; a level caps Auto on Fable alone.
-                  pick({ key: "settings-fable-ceiling", label: "Fable max", value: shown.fableCeiling, options: [{ value: 'same', label: 'same as Max' }, ...opts(EFFORTS)], onSelect: set('fableCeiling') }),
+                  pick({ key: "settings-fable-ceiling", label: "Fable max", value: shown.fableCeiling, options: [{ value: 'same', label: 'same as Max' }, ...opts(EFFORTS)], onSelect: set('fableCeiling'), row: true }),
                   // Effort for helpers on a row of its own: the dashboard's Auto switch exactly (switch, word, slide,
                   // one blank button laid over both), then what it does now.
                   <Box key="settings-helpers-row" width="100%" flexDirection="row" alignItems="center" gap={1}>

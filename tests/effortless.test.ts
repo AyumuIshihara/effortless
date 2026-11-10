@@ -4160,6 +4160,20 @@ describe('agent panel', () => {
     expect(sent.map(s => s.effort)).toEqual(['high'])
   })
 
+  test('with Helpers off, a subagent follows the turn where Min is above Max, as before Fable max', { options: { effortFloor: 'high', effortCeiling: 'medium' } } as never, async ($, on) => {
+    engine(on)
+    judgeSays(on, '{"model":"opus","effort":"low","why":"small"}')
+    on('agent.spawn', () => ({ agentId: 'm1', model: 'claude-opus-5-5' }) as never)
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'find why the relay drops messages', wait: false, origin: { kind: 'composer' } })
+    await step($, 'medium')
+    await $.agent.spawn({ prompt: 'read relay/worker.js', description: 'read relay', subagentType: 'Explore' } as never)
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1, agentId: 'm1' } as never)) {
+      // drain
+    }
+    expect(sent.map(s => s.effort)).toEqual(['high', 'high'])
+  })
+
   test('with Helpers off, a subagent of a judged turn runs at the turn\'s effort, never below medium', async ($, on) => {
     engine(on)
     let verdict = '{"model":"opus","effort":"xhigh","why":"hard"}'
