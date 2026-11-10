@@ -1023,7 +1023,6 @@ async function modelIs($: EngineInterface, id: string) {
   engineEffort = undefined
   declined = null
   const current = await read($, pick)
-  // choose holds Auto's pick to the new model's Max (Fable's own on Fable), so the band shows what goes out.
   if (current && current.model !== key) await choose($, { ...current, model: key })
   if ((await read($, suggestion)) === key) await update($, suggestion, () => null)
 }
@@ -2165,13 +2164,6 @@ async function toggleAutoEffort($: EngineInterface) {
 
 async function choose($: EngineInterface, next: Pick | null) {
   pickCarried = false
-  // Every pick Auto makes keeps to the Max of the model the chat runs now (Fable's own on Fable), whichever path set it:
-  // a verdict, one held for the turn's end, or a model switch. Your own pick and a level you named pass as they are.
-  if (next && next.by !== 'manual' && next.by !== 'named') {
-    const key = (await read($, model)) ?? next.model
-    const id = MODELS.find(m => m.key === key)?.id
-    if (id) next = { ...next, effort: modelCapped(next.effort, id) }
-  }
   const before = await read($, pick)
   await Promise.all([update($, pick, () => next), $.store.set('pick', next)])
   // A change Auto made is shown as "Low → High" for a moment, so the switch is seen.
@@ -2260,7 +2252,18 @@ async function snap($: EngineInterface) {
     read($, cacheLeft),
     read($, isCompacting),
   ])
-  return { auto, autoModel, current, judging, wanted, shownByApp, modelNow, switchedNow, pausedNow, cacheNow, compacting }
+  return { auto, autoModel, ...heldToModel(current, switchedNow, (auto && routed) || modelNow), judging, wanted, shownByApp, modelNow, pausedNow, cacheNow, compacting }
+}
+
+/** What the band shows: Auto's pick as it goes out on the chat's model, held to that model's Max (Fable's own on Fable).
+ * The pick itself keeps the judged level, so a later model or setting gets it back; each request is held as it goes. */
+export function heldToModel(current: Pick | null, switchedNow: { from: Effort; to: Effort } | null, modelNow: ModelKey | null, cfg: { floor: Effort; ceiling: Effort; fableCeiling: Effort | 'same' } = config) {
+  const id = MODELS.find(m => m.key === (modelNow ?? current?.model))?.id
+  if (!current || !id || current.by === 'manual' || current.by === 'named') return { current, switchedNow }
+  const effort = modelCapped(current.effort, id, cfg)
+  const shown = effort === current.effort ? current : { ...current, effort, why: 'your settings' }
+  const moved = switchedNow && { from: modelCapped(switchedNow.from, id, cfg), to: modelCapped(switchedNow.to, id, cfg) }
+  return { current: shown, switchedNow: moved && moved.from !== moved.to ? moved : null }
 }
 type Snap = Awaited<ReturnType<typeof snap>>
 
@@ -4292,8 +4295,6 @@ Saved to ${out}.md and .json` }
       const picked = await read($, pick)
       // The cheaper model keeps to its own Max: the pick may have been judged within Fable's higher one.
       const effort = picked && picked.by !== 'manual' && picked.by !== 'named' ? modelCapped(picked.effort, to) : picked?.effort ?? e.effort
-      // Held lower than the pick (the cheaper model's Max): the pick follows, so the band shows what goes out.
-      if (picked && effort !== picked.effort) await choose($, { ...picked, effort })
       void proof($, `request ${e.index}: ${e.model} -> ${to} at ${effort}`)
       const result = yield* send({ ...e, model: to, effort })
       if (picked && picked.by !== 'manual' && result.usage) await tally($, effort, result.usage)
@@ -4331,9 +4332,6 @@ Saved to ${out}.md and .json` }
     }
     // The pick was judged for the chat's model; a request on another model keeps to that model's Max (manual and named pass).
     const effort = p.by === 'manual' || p.by === 'named' ? p.effort : modelCapped(p.effort, e.model)
-    // Held lower than the pick (Fable max lowered since, or another model's Max): the pick follows, so the band shows
-    // what goes out and the tally counts it there.
-    if (effort !== p.effort) await choose($, { ...p, effort })
     if (e.agentId === undefined) void proof($, `request ${e.index} (${e.model}): effort ${e.effort ?? 'none'} -> ${effort}`)
     const result = yield* send({ ...e, effort })
     // Only requests Auto steered count.

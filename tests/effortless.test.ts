@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -998,6 +998,16 @@ describe('cache guard', () => {
     expect(loosestCeiling({ ceiling: 'medium', fableCeiling: 'xhigh' })).toBe('xhigh')
     expect(loosestCeiling({ ceiling: 'high', fableCeiling: 'low' })).toBe('high')
     expect(loosestCeiling({ ceiling: 'high', fableCeiling: 'same' })).toBe('high')
+    // The band holds Auto's pick to the model's Max; your own pick and a named level pass, and a switch that comes to
+    // nothing on this model is not shown.
+    const opts = { floor: 'low', ceiling: 'max', fableCeiling: 'medium' } as const
+    const p = { model: 'fable', effort: 'xhigh', why: 'hard', by: 'haiku' } as const
+    expect(heldToModel(p, null, 'fable', opts).current).toMatchObject({ effort: 'medium', why: 'your settings' })
+    expect(heldToModel(p, null, 'opus', opts).current).toMatchObject({ effort: 'xhigh', why: 'hard' })
+    expect(heldToModel({ ...p, by: 'named' }, null, 'fable', opts).current?.effort).toBe('xhigh')
+    expect(heldToModel({ ...p, by: 'manual' }, null, 'fable', opts).current?.effort).toBe('xhigh')
+    expect(heldToModel(p, { from: 'high', to: 'xhigh' }, 'fable', opts).switchedNow).toBeNull()
+    expect(heldToModel(p, { from: 'low', to: 'xhigh' }, 'fable', opts).switchedNow).toEqual({ from: 'low', to: 'medium' })
     // For helpers Max wins over Min, as helperFloor has it.
     expect(helperCapped('high', 'claude-fable-5-2', { ceiling: 'max', fableCeiling: 'low' })).toBe('low')
     expect(helperCapped('high', 'claude-opus-5-5', { ceiling: 'max', fableCeiling: 'low' })).toBe('high')
@@ -1038,8 +1048,15 @@ describe('cache guard', () => {
       // drain
     }
     expect(sent.map(s => s.effort)).toEqual(['xhigh', 'medium'])
-    // The band says the switch, as for any change Auto makes: from the old pick to Fable max.
-    expect(await drawn(footer)).toContain('XHigh → Medium')
+    // The band shows what goes out on Fable; the pick keeps XHigh for a later model.
+    expect(await drawn(footer)).toContain(' Medium ')
+    expect(await drawn(footer)).not.toContain('XHigh')
+    // Back on Opus, the judged XHigh goes out again: nothing was lost on Fable.
+    model = 'claude-opus-5-5'
+    for await (const _ of $.turn.step({ turnId: 't1', index: 2, model, effort: 'high', messageCount: 1 })) {
+      // drain
+    }
+    expect(sent.map(s => s.effort)).toEqual(['xhigh', 'medium', 'xhigh'])
     await footer.unmount()
   })
 
@@ -3511,12 +3528,12 @@ describe('a message typed while a turn runs', () => {
     await stepOn('t1', 1)
     await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'completed' } as never)
     // Before the next request goes out, the band already shows Fable max, not the held High.
-    expect(await drawn(footer)).not.toMatch(/[^X]High →|→ High/)
+    expect(await drawn(footer)).not.toMatch(/High/)
     await stepOn('t2', 0)
     expect(sent.map(s => s.effort)).toEqual(['xhigh', 'medium', 'medium'])
     // The held High never reaches the band: it comes down to Fable max like the rest.
-    expect(await drawn(footer)).toContain('→ Medium')
-    expect(await drawn(footer)).not.toContain('→ High')
+    expect(await drawn(footer)).toContain(' Medium ')
+    expect(await drawn(footer)).not.toMatch(/High/)
     await footer.unmount()
   })
 
