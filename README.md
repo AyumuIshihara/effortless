@@ -106,6 +106,9 @@ new version in the chat you pressed it in, with nothing to type.
 | **Compact** | compacts the chat. It turns into a glowing **Handoff** when Haiku says a fresh chat would pay off, with Compact as quiet text beside it. Set Settings → Handoff → Handoff button to **Always** to keep Handoff on the bar |
 | **⚙** | settings |
 
+Settings → Effort sets the range Auto picks within: **Min** and **Max** for every model, and **Fable max**, a Max for
+Fable alone (**same as Max** by default). As with Max, a higher Min wins, except for helpers (subagents), where Max wins as it always has. A level you name in the prompt ("max effort") runs past both.
+
 Prefer it quiet? Settings → Customize has a **Minimal** look with no bar. It also sets the **Appearance** (match Claude Code, dark or light) and the **Theme** (violet, Claude orange or cherry blossom).
 
 ### When a chat gets heavy

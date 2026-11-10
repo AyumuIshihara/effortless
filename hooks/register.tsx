@@ -607,6 +607,8 @@ export type JudgeConfig = {
   floor: Effort
   /** Auto never goes above this effort. */
   ceiling: Effort
+  /** On Fable, Auto never goes above this effort instead of the ceiling; same follows the ceiling. */
+  fableCeiling: Effort | 'same'
   /** What the person switched off: the footer's handoff button and any of the alert bands. */
   hide: Hideable[]
   /** The swamp band shows once the context fills this share of the window, in percent. */
@@ -645,6 +647,7 @@ let config: JudgeConfig = {
   bias: 0,
   floor: 'low',
   ceiling: 'max',
+  fableCeiling: 'same',
   hide: ['reason'],
   swampAt: 70,
   layout: 'default',
@@ -669,6 +672,7 @@ export function readConfig(options: unknown): JudgeConfig {
     bias: Math.max(-2, Math.min(2, Math.round(Number(str(o.effortBias)) || 0))),
     floor: EFFORTS.includes(str(o.effortFloor) as Effort) ? (str(o.effortFloor) as Effort) : 'low',
     ceiling: EFFORTS.includes(str(o.effortCeiling) as Effort) ? (str(o.effortCeiling) as Effort) : 'max',
+    fableCeiling: EFFORTS.includes(str(o.fableEffortCeiling) as Effort) ? (str(o.fableEffortCeiling) as Effort) : 'same',
     swampAt: SWAMP_STEPS.includes(Number(str(o.swampAt)) as (typeof SWAMP_STEPS)[number]) ? Number(str(o.swampAt)) : 70,
     layout: str(o.layout) === 'minimal' ? 'minimal' : 'default',
     compactWith: str(o.compactWith) === 'session' ? 'session' : 'haiku',
@@ -1019,6 +1023,7 @@ async function modelIs($: EngineInterface, id: string) {
   engineEffort = undefined
   declined = null
   const current = await read($, pick)
+  // choose holds Auto's pick to the new model's Max (Fable's own on Fable), so the band shows what goes out.
   if (current && current.model !== key) await choose($, { ...current, model: key })
   if ((await read($, suggestion)) === key) await update($, suggestion, () => null)
 }
@@ -1381,6 +1386,30 @@ export function bounded(effort: Effort, floor: Effort, ceiling: Effort): Effort 
   const lo = EFFORTS.indexOf(floor)
   const hi = Math.max(lo, EFFORTS.indexOf(ceiling))
   return EFFORTS[Math.max(lo, Math.min(hi, EFFORTS.indexOf(effort)))]
+}
+
+/** The highest effort Auto picks on this model: Fable's own Max when one is set, else the Max for every model. */
+export function ceilingFor(key: ModelKey | undefined, cfg: { ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
+  return key === 'fable' && cfg.fableCeiling !== 'same' ? cfg.fableCeiling : cfg.ceiling
+}
+
+/** A helper's effort brought down to its model's Max (Fable's own on Fable). Unlike modelCapped, Max wins over Min
+ * here, as helperFloor has it for helpers. */
+export function helperCapped(effort: Effort, modelId: string, cfg: { ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
+  const hi = EFFORTS.indexOf(ceilingFor(keyOf(modelId), cfg))
+  return EFFORTS.indexOf(effort) > hi ? EFFORTS[hi] : effort
+}
+
+/** The highest Max any model has: what a helper is judged within before its model is known. */
+export function loosestCeiling(cfg: { ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
+  return cfg.fableCeiling !== 'same' && EFFORTS.indexOf(cfg.fableCeiling) > EFFORTS.indexOf(cfg.ceiling) ? cfg.fableCeiling : cfg.ceiling
+}
+
+/** An effort Auto picked, brought down to the Max of the model the request goes to (Fable's own Max on Fable), never
+ * below Min: as in bounded, Min wins over a lower Max. It only lowers, so a pick within the model's range passes. */
+export function modelCapped(effort: Effort, modelId: string, cfg: { floor: Effort; ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
+  const hi = Math.max(EFFORTS.indexOf(cfg.floor), EFFORTS.indexOf(ceilingFor(keyOf(modelId), cfg)))
+  return EFFORTS.indexOf(effort) > hi ? EFFORTS[hi] : effort
 }
 
 /** Save mode caps what Auto picks at medium; a higher pick comes down to it. */
@@ -1799,6 +1828,7 @@ const SETTING_FIELDS = {
   bias: 'effortBias',
   floor: 'effortFloor',
   ceiling: 'effortCeiling',
+  fableCeiling: 'fableEffortCeiling',
   handoffAfter: 'handoffAfter',
   handoffSkill: 'handoffSkill',
   hide: 'hide',
@@ -1830,6 +1860,7 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
     effortBias: String(config.bias),
     effortFloor: config.floor,
     effortCeiling: config.ceiling,
+    fableEffortCeiling: config.fableCeiling,
     handoffAfter: config.handoffAfter,
     handoffSkill: config.handoffSkill,
     hide: config.hide.join(','),
@@ -2134,6 +2165,13 @@ async function toggleAutoEffort($: EngineInterface) {
 
 async function choose($: EngineInterface, next: Pick | null) {
   pickCarried = false
+  // Every pick Auto makes keeps to the Max of the model the chat runs now (Fable's own on Fable), whichever path set it:
+  // a verdict, one held for the turn's end, or a model switch. Your own pick and a level you named pass as they are.
+  if (next && next.by !== 'manual' && next.by !== 'named') {
+    const key = (await read($, model)) ?? next.model
+    const id = MODELS.find(m => m.key === key)?.id
+    if (id) next = { ...next, effort: modelCapped(next.effort, id) }
+  }
   const before = await read($, pick)
   await Promise.all([update($, pick, () => next), $.store.set('pick', next)])
   // A change Auto made is shown as "Low → High" for a moment, so the switch is seen.
@@ -3665,7 +3703,9 @@ async function helperEffort($: EngineInterface, prompt: string, type: string): P
   if (!verdict || verdict.why === UNSURE) return null
   const saving = (await read($, saveUntil)) !== null
   const leaned = tipped(verdict.effort, verdict.sure, config.bias)
-  const effort = capped(bounded(leaned, helperFloor(config.floor, config.ceiling), config.ceiling), saving)
+  // The helper's model is not known yet: judged within the loosest Max, then held to its own model's at its spawn and requests.
+  const loose = loosestCeiling()
+  const effort = capped(bounded(leaned, helperFloor(config.floor, loose), loose), saving)
   return { ...verdict, effort, why: effort !== leaned && EFFORTS.indexOf(leaned) < EFFORTS.indexOf(effort) ? `${verdict.why} (helpers start at medium)` : verdict.why }
 }
 
@@ -4146,7 +4186,7 @@ Saved to ${out}.md and .json` }
         // reloads the context, so with Auto on for model it is only suggested.
         if (wantsEffort) {
           const saving = (await read($, saveUntil)) !== null
-          const leaned = bounded(tipped(verdict.effort, verdict.sure, config.bias), config.floor, config.ceiling)
+          const leaned = bounded(tipped(verdict.effort, verdict.sure, config.bias), config.floor, ceilingFor(inUse))
           const effort = capped(leaned, saving)
           const why = effort !== leaned ? 'save mode' : leaned !== verdict.effort ? 'your settings' : verdict.why
           const applied: Pick = { ...verdict, model: inUse, effort, why }
@@ -4250,15 +4290,19 @@ Saved to ${out}.md and .json` }
     if (e.agentId === undefined && routed && (await read($, isAuto))) {
       const to = MODELS.find(m => m.key === routed)!.id
       const picked = await read($, pick)
-      const effort = picked?.effort ?? e.effort
+      // The cheaper model keeps to its own Max: the pick may have been judged within Fable's higher one.
+      const effort = picked && picked.by !== 'manual' && picked.by !== 'named' ? modelCapped(picked.effort, to) : picked?.effort ?? e.effort
+      // Held lower than the pick (the cheaper model's Max): the pick follows, so the band shows what goes out.
+      if (picked && effort !== picked.effort) await choose($, { ...picked, effort })
       void proof($, `request ${e.index}: ${e.model} -> ${to} at ${effort}`)
       const result = yield* send({ ...e, model: to, effort })
-      if (picked && picked.by !== 'manual' && result.usage) await tally($, picked.effort, result.usage)
+      if (picked && picked.by !== 'manual' && result.usage) await tally($, effort, result.usage)
       return result
     }
     // A helper the judge picked an effort for at its spawn runs every request at it. Haiku takes no effort.
     if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string' && keyOf(e.model) !== 'haiku') {
-      const effort = await helperEffortOf($, e.agentId)
+      const chosen = await helperEffortOf($, e.agentId)
+      const effort = chosen && helperCapped(chosen, e.model)
       if (effort) {
         if (e.index === 0) void proof($, `helper ${e.agentId} request 0 (${e.model}): effort ${e.effort} -> ${effort}`)
         const result = yield* send({ ...e, effort })
@@ -4277,19 +4321,26 @@ Saved to ${out}.md and .json` }
     // definition sets its own effort cannot be told apart from one that inherits it, so it follows the turn too.
     if (e.agentId !== undefined) {
       if (p.by === 'manual') return yield* send(e)
-      const floor = helperFloor(config.floor, config.ceiling)
-      const effort = EFFORTS.indexOf(p.effort) < EFFORTS.indexOf(floor) ? floor : p.effort
+      const floor = helperFloor(config.floor, ceilingFor(keyOf(e.model)))
+      const raised = EFFORTS.indexOf(p.effort) < EFFORTS.indexOf(floor) ? floor : p.effort
+      // A named level runs past Max on helpers too; Auto's pick stays within the helper's own model's Max.
+      const effort = p.by === 'named' ? raised : helperCapped(raised, e.model)
       if (e.index === 0) void proof($, `subagent ${e.agentId} (${e.model}): effort ${e.effort ?? 'none'} -> ${effort}, the turn's`)
       return yield* send({ ...e, effort })
     }
-    if (e.agentId === undefined) void proof($, `request ${e.index} (${e.model}): effort ${e.effort ?? 'none'} -> ${p.effort}`)
-    const result = yield* send({ ...e, effort: p.effort })
+    // The pick was judged for the chat's model; a request on another model keeps to that model's Max (manual and named pass).
+    const effort = p.by === 'manual' || p.by === 'named' ? p.effort : modelCapped(p.effort, e.model)
+    // Held lower than the pick (Fable max lowered since, or another model's Max): the pick follows, so the band shows
+    // what goes out and the tally counts it there.
+    if (effort !== p.effort) await choose($, { ...p, effort })
+    if (e.agentId === undefined) void proof($, `request ${e.index} (${e.model}): effort ${e.effort ?? 'none'} -> ${effort}`)
+    const result = yield* send({ ...e, effort })
     // Only requests Auto steered count.
     if (e.agentId === undefined && p.by !== 'manual' && result.usage) {
-      await tally($, p.effort, result.usage)
+      await tally($, effort, result.usage)
       void proof(
         $,
-        `response ${e.index} at ${p.effort}: ${result.usage.output_tokens} out, ${result.usage.cache_read_input_tokens ?? 0} cache read, ${result.usage.cache_creation_input_tokens ?? 0} cache write`,
+        `response ${e.index} at ${effort}: ${result.usage.output_tokens} out, ${result.usage.cache_read_input_tokens ?? 0} cache read, ${result.usage.cache_creation_input_tokens ?? 0} cache write`,
       )
     }
     return result
@@ -4405,15 +4456,20 @@ Saved to ${out}.md and .json` }
     const waiting = helper ? { description: e.description, type: e.subagentType, parentId: e.parentAgentId, effort: helper.effort } : null
     if (waiting) helperWaiting = [...helperWaiting, waiting].slice(-20)
     const result = await next(e)
+    let shownHelper: Effort | undefined
     if (waiting) {
       helperWaiting = helperWaiting.filter(w => w !== waiting)
+      // helperPicks keeps the judged level, whichever way the first request came; each request is held to its model's Max
+      // as it goes out. Counted and shown here at the Max of the model the helper starts on.
       if ('agentId' in result && result.agentId && !helperPicks.has(result.agentId)) helperPicks.set(result.agentId, waiting.effort)
+      const shown = 'model' in result && typeof result.model === 'string' ? helperCapped(waiting.effort, result.model) : waiting.effort
+      shownHelper = shown
       if ('agentId' in result && result.agentId) {
         await update($, saved, old => {
           const t = asSpent(old)
-          return { ...t, helpers: { ...t.helpers, runs: { ...t.helpers.runs, [waiting.effort]: (t.helpers.runs[waiting.effort] ?? 0) + 1 } } }
+          return { ...t, helpers: { ...t.helpers, runs: { ...t.helpers.runs, [shown]: (t.helpers.runs[shown] ?? 0) + 1 } } }
         }).catch(() => undefined)
-        void proof($, `helper ${e.subagentType} "${e.description}": ${waiting.effort} (${helper?.why})`)
+        void proof($, `helper ${e.subagentType} "${e.description}": ${shown} (${helper?.why})`)
       }
     }
     if (e.isTeammate || e.workflow || !('agentId' in result) || !result.agentId) return result
@@ -4421,8 +4477,9 @@ Saved to ${out}.md and .json` }
     const now = await $.clock.now()
     const rec: AgentRec = { id, type: e.fork ? 'fork' : e.subagentType, task: e.description, state: 'running', startedAt: now, model: result.model }
     if (helper) {
-      rec.effort = EFFORT_LABELS[helper.effort]
-      rec.why = helper.why
+      rec.effort = EFFORT_LABELS[shownHelper ?? helper.effort]
+      // Held below the judged level by its model's Max: the reason says so, not that helpers start at medium.
+      rec.why = shownHelper && shownHelper !== helper.effort ? `${helper.why.replace(' (helpers start at medium)', '')} (this model's Max)` : helper.why
     }
     if (e.parentAgentId) rec.parentId = e.parentAgentId
     await update($, agentsState, list => [...list.filter(a => a.id !== id), rec].slice(-40))
@@ -4570,6 +4627,7 @@ Saved to ${out}.md and .json` }
         bias: draft.bias !== undefined ? Number(draft.bias) : config.bias,
         floor: (draft.floor ?? config.floor) as Effort,
         ceiling: (draft.ceiling ?? config.ceiling) as Effort,
+        fableCeiling: (draft.fableCeiling ?? config.fableCeiling) as JudgeConfig['fableCeiling'],
         judge: (draft.judge ?? config.judge) as JudgeConfig['judge'],
         handoffAfter: draft.handoffAfter ?? config.handoffAfter,
         handoffSkill: draft.handoffSkill ?? config.handoffSkill,
@@ -4596,7 +4654,7 @@ Saved to ${out}.md and .json` }
       const hidden = (draft.hide ?? config.hide.join(',')).split(',').filter(Boolean)
       const judgeName = shown.judge === 'haiku' ? 'Haiku' : hasKey || shown.judge === 'jev' ? 'Haiku + Jev' : 'Haiku'
       const summaries: Record<SettingsCard, string> = {
-        effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.helpers === 'on' ? ' · helpers' : ''}`,
+        effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.fableCeiling !== 'same' ? ` · Fable to ${shown.fableCeiling}` : ''}${shown.helpers === 'on' ? ' · helpers' : ''}`,
         model: shown.modelAuto === 'on' ? 'Cheaper when it can' : "Always the chat's",
         judge: tested && tested.ok !== null ? `${judgeName} · ${tested.ok ? 'working' : 'failing'}` : judgeName,
         handoff: `${shown.handoffSkill ? `/${shown.handoffSkill}` : 'Built in'} · compact alert at ${shown.swampAt}%`,
@@ -4644,7 +4702,7 @@ Saved to ${out}.md and .json` }
       // The terminal's dropdown opens its list inside the wrapping row, which jumps the layout and is hard to click.
       // There a short list is a row of buttons, the picked one boxed; a long one (the skills) stays a dropdown.
       type Pick = { key: string; label?: string; value: string; options: { value: string; label: string }[]; onSelect: (v: string) => unknown }
-      const pick = (p: Pick) => term && p.options.length <= 5 ? (
+      const pick = (p: Pick) => term && p.options.length <= 6 ? (
         <Box key={p.key} width="100%" flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center">
           {p.label ? <Text key={`${p.key}-label`} dimColor>{p.label}</Text> : null}
           {p.options.map(o => o.value === p.value ? (
@@ -4812,6 +4870,8 @@ Saved to ${out}.md and .json` }
                   <Box key="gap" width={2} />,
                   pick({ key: "settings-floor", label: "Min", value: shown.floor, options: opts(EFFORTS), onSelect: set('floor') }),
                   pick({ key: "settings-ceiling", label: "Max", value: shown.ceiling, options: opts(EFFORTS), onSelect: set('ceiling') }),
+                  // Fable's own Max: same follows the Max above; a level caps Auto on Fable alone.
+                  pick({ key: "settings-fable-ceiling", label: "Fable max", value: shown.fableCeiling, options: [{ value: 'same', label: 'same as Max' }, ...opts(EFFORTS)], onSelect: set('fableCeiling') }),
                   // Effort for helpers on a row of its own: the dashboard's Auto switch exactly (switch, word, slide,
                   // one blank button laid over both), then what it does now.
                   <Box key="settings-helpers-row" width="100%" flexDirection="row" alignItems="center" gap={1}>

@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.72.4",
+    "date": "2026-11-10",
+    "note": "Fable gets a Max of its own",
+    "detail": [
+      "Settings → Effort has Fable max beside Min and Max: Auto never picks above it on Fable, helpers included. Same as Max by default, and a higher Min still wins; a level named in the prompt still runs past it."
+    ],
+    "public": true
+  },
+  {
     "version": "1.72.3",
     "date": "2026-11-10",
     "note": "The click cover on Compact is clipped, not shrunk",

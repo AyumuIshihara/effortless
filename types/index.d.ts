@@ -44,6 +44,8 @@ export type SettingsDraft = {
   bias?: string
   floor?: string
   ceiling?: string
+  /** same (follows ceiling) or an effort: Auto's Max on Fable alone. */
+  fableCeiling?: string
   judge?: string
   handoffAfter?: string
   handoffSkill?: string
