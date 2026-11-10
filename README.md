@@ -286,6 +286,8 @@ claude --plugin-dir .
 
 `tools/render-band` draws the bar the way the desktop app does, without opening it; the images in this README come from it.
 
+effortless keeps two logs in `~/.claude` (or `CLAUDE_CONFIG_DIR`). `effortless-render-<chat>.log` holds the last 300 draw requests of a chat. `effortless-timing-<chat>-<load>-<part>.log` holds how long draws and update checks took: the first five draws on each surface, slow ones (200 ms or more), ones after a pause of 5 seconds or more, and failed ones. A timing file goes on in the next part after 500 lines, and none is deleted; remove old ones by hand when you no longer need them.
+
 ## License
 
 [MIT](LICENSE)

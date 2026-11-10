@@ -1047,6 +1047,7 @@ let askJevUrl: EnvAsk
 let askJevKey: EnvAsk
 let askUserProfile: EnvAsk
 let askHome: EnvAsk
+let askConfigDir: EnvAsk
 const envLog = ($: EngineInterface) => (askLog = askLog ?? $.env.get('EFFORTLESS_LOG'))
 const envTemp = ($: EngineInterface) => (askTemp = askTemp ?? $.env.get('TEMP'))
 const envTmpdir = ($: EngineInterface) => (askTmpdir = askTmpdir ?? $.env.get('TMPDIR'))
@@ -1055,6 +1056,7 @@ const envJevUrl = ($: EngineInterface) => (askJevUrl = askJevUrl ?? $.env.get('J
 const envJevKey = ($: EngineInterface) => (askJevKey = askJevKey ?? $.env.get('TYPESAFE_API_KEY'))
 const envUserProfile = ($: EngineInterface) => (askUserProfile = askUserProfile ?? $.env.get('USERPROFILE'))
 const envHome = ($: EngineInterface) => (askHome = askHome ?? $.env.get('HOME'))
+const envConfigDir = ($: EngineInterface) => (askConfigDir = askConfigDir ?? $.env.get('CLAUDE_CONFIG_DIR'))
 
 async function proofPath($: EngineInterface): Promise<string | undefined> {
   const named = await envLog($)
@@ -2326,21 +2328,164 @@ let lastRenderBranch = ''
 // Every time the app asked for the band, with what it sent, written to ~/.claude/effortless-render-<chat>.log each second
 // (the last 300): how often the band is really redrawn in the app, which the render rig cannot see (hover flicker).
 const renderLog: string[] = []
-let renderLogWritten = 0
+// Where the saved lines end, counted from the first line of the load (the lines cut from the front included, so a cut
+// while a write is on its way moves nothing), and whether a write is on its way: one write at a time, and a line counts
+// as saved only after the write went through (a failed one is written again the next second).
+let renderLogDropped = 0
+let renderLogSaved = 0
+let renderLogWriting = false
+// No folder to write to (no CLAUDE_CONFIG_DIR and no home): the environment does not change within a load, so ask once.
+let renderLogNoDir = false
+// The one ask for the chat's id, where the load has no session start: render log and timing log share it.
+let sessionAsk: Promise<void> | undefined
+/** The folder the log goes in: CLAUDE_CONFIG_DIR when set, else <home>/.claude. Trailing separators go, a root's own
+ * one stays (`\`, `C:\`), and a drive alone (`C:`) stays as given. */
+export function logDirOf(configured: string | undefined, home: string | undefined): string | undefined {
+  const raw = String(configured ?? '').trim()
+  if (raw) {
+    const stripped = raw.replace(/[\\/]+$/, '')
+    const isRoot = stripped === '' || /^[A-Za-z]:$/.test(stripped)
+    return isRoot && stripped !== raw ? stripped + raw.charAt(raw.length - 1) : stripped
+  }
+  return home ? `${home}/.claude` : undefined
+}
+/** A file of that name in that folder: no separator added after one, nor after a drive alone. */
+export function logFileOf(dir: string, fileName: string): string {
+  return /[\\/:]$/.test(dir) ? `${dir}${fileName}` : `${dir}/${fileName}`
+}
+export const renderLogName = (session: string) => `effortless-render-${session}.log`
+/** The timing log's part `part` (from 1) of this load of the chat: a part is never written over by another load or chat. */
+export const timingLogName = (session: string, load: string, part: number) => `effortless-timing-${session}-${load}-${String(part).padStart(3, '0')}.log`
+export const TIMING_PART_LINES = 500
+export const TIMING_KEEP_PARTS = 5
+export type TimingPart = { no: number; lines: string[]; saved: number; session?: string }
+export type TimingBuffer = { parts: TimingPart[]; nextNo: number; dropped: number }
+export const newTimingBuffer = (): TimingBuffer => ({ parts: [], nextNo: 1, dropped: 0 })
+/** Adds a line to the current part. A full part makes the next one; of the parts not yet written, at most five are kept:
+ * the oldest goes, and the new part opens with `dropped parts=<all dropped so far>`. */
+export function pushTiming(buf: TimingBuffer, line: string, iso: string, session: string): void {
+  let part = buf.parts[buf.parts.length - 1]
+  if (!part || part.lines.length >= TIMING_PART_LINES) {
+    // A written part is out of the memory; one not written yet stays.
+    buf.parts = buf.parts.filter(p => p.saved < p.lines.length)
+    let isCut = false
+    while (buf.parts.length >= TIMING_KEEP_PARTS) {
+      buf.parts.shift()
+      buf.dropped++
+      isCut = true
+    }
+    part = { no: buf.nextNo++, lines: [], saved: 0 }
+    if (isCut) part.lines.push(`${iso} ${session} dropped parts=${buf.dropped}`)
+    buf.parts.push(part)
+  }
+  part.lines.push(line)
+}
+// Timing lines of this load (draws, update checks), apart from the render log whose last 300 lines hold them for minutes
+// only: written part by part, one write at a time, each part marked saved only by its own write going through.
+let timing = newTimingBuffer()
+let timingWriting = false
+let loadId = '00000000'
+const timingAdd = (line: string) => pushTiming(timing, line, new Date().toISOString(), loadedSession)
+/** The chat's 8 characters once known: from the session start, else asked for once; undefined where there is none. */
+async function knownSession($: EngineInterface): Promise<string | undefined> {
+  if (loadedSession === '-' || loadedSession === '?') {
+    sessionAsk = sessionAsk ?? $.session.id().then(
+      sid => {
+        if (sid && (loadedSession === '-' || loadedSession === '?')) loadedSession = String(sid).slice(0, 8)
+      },
+      () => undefined,
+    )
+    await sessionAsk
+  }
+  return loadedSession !== '-' && loadedSession !== '?' && /^[\w-]+$/.test(loadedSession) ? loadedSession : undefined
+}
+/** Writes the parts not yet saved, oldest first, each whole to its own file; stops at the first write that fails. */
+async function writeTimingLog($: EngineInterface) {
+  if (timingWriting || renderLogNoDir || !timing.parts.some(p => p.saved < p.lines.length)) return
+  timingWriting = true
+  try {
+    const session = await knownSession($)
+    if (!session) return
+    const dir = await renderLogDir($)
+    if (!dir) {
+      renderLogNoDir = true
+      return
+    }
+    for (let guard = 0; guard < TIMING_KEEP_PARTS + 1; guard++) {
+      const part = timing.parts.find(p => p.saved < p.lines.length)
+      if (!part) return
+      // The chat a part is named for is fixed at its first write; a later write of it goes to the same file.
+      part.session = part.session ?? session
+      const upto = part.lines.length
+      await $.fs.write(logFileOf(dir, timingLogName(part.session, loadId, part.no)), namedLines(part.lines.slice(0, upto), part.session).join('\n') + '\n')
+      // Only this part's own count: a part that went on meanwhile has more lines past `upto`, still to write.
+      part.saved = Math.max(part.saved, upto)
+    }
+  } catch {
+    // Not marked as saved: the next second writes it again.
+  } finally {
+    timingWriting = false
+  }
+}
+async function renderLogDir($: EngineInterface): Promise<string | undefined> {
+  const configured = await envConfigDir($).catch(() => undefined)
+  const isSet = String(configured ?? '').trim() !== ''
+  return logDirOf(configured, isSet ? undefined : ((await envUserProfile($)) ?? (await envHome($))))
+}
+/** The file's lines: those made before the chat was known carry `-` (or `?`, where its id could not be read at start)
+ * for it, which the known one takes. */
+export function namedLines(lines: readonly string[], session: string): string[] {
+  return lines.map(line => line.replace(/^(\S+) [-?] /, `$1 ${session} `))
+}
 async function writeRenderLog($: EngineInterface) {
-  if (renderLog.length === renderLogWritten) return
-  if (renderLog.length > 600) renderLog.splice(0, renderLog.length - 300)
-  renderLogWritten = renderLog.length
-  const home = (await envUserProfile($)) ?? (await envHome($))
-  // One file per chat: a shared file was overwritten whole by whichever chat drew last.
-  if (home) await $.fs.write(`${home}/.claude/effortless-render-${loadedSession}.log`, renderLog.slice(-300).join('\n') + '\n').catch(() => undefined)
+  // Kept to the last 300 whether or not a write can go: a load that cannot write still holds no more than that.
+  if (renderLog.length > 600) {
+    const dropped = renderLog.length - 300
+    renderLog.splice(0, dropped)
+    renderLogDropped += dropped
+  }
+  if (renderLogWriting || renderLogNoDir || renderLogDropped + renderLog.length <= renderLogSaved) return
+  renderLogWriting = true
+  try {
+    // A reload with no session start leaves the chat unknown: ask once; without it there is no file to name.
+    const session = await knownSession($)
+    if (!session) return
+    const dir = await renderLogDir($)
+    if (!dir) {
+      renderLogNoDir = true
+      return
+    }
+    const upto = renderLogDropped + renderLog.length
+    // One file per chat: a shared file was overwritten whole by whichever chat drew last.
+    await $.fs.write(logFileOf(dir, renderLogName(session)), namedLines(renderLog.slice(-300), session).join('\n') + '\n')
+    renderLogSaved = Math.max(renderLogSaved, upto)
+  } catch {
+    // Not marked as saved: the next second writes it again.
+  } finally {
+    renderLogWriting = false
+  }
+}
+// Per surface: when its last draw was asked (performance.now) and how many it has had in this load.
+const drawAskedAt = new Map<string, number>()
+const drawsBySurface = new Map<string, number>()
+/** Whether a draw goes in the timing log: a failed one, the first five of its surface, a slow one (200 ms), or one after a
+ * long quiet (5000 ms). */
+export function drawLogged(drawsSoFar: number, tookMs: number, gapMs: number, failed = false): boolean {
+  return failed || drawsSoFar <= 5 || tookMs >= 200 || gapMs >= 5000
+}
+/** One timing-log line for a draw: how long it took, how long after the previous ask (-1 for the first), how it ended. */
+export function drawLine(iso: string, session: string, tookMs: number, gapMs: number, failed: boolean): string {
+  return `${iso} ${session} draw took ${Math.round(tookMs)} ms gap ${Math.round(gapMs)} ms ${failed ? 'failed' : 'ok'}`
+}
+/** One timing-log line for an update check: how long, and which way the version was found. */
+export function updateLine(iso: string, session: string, ms: number, via: UpdateVia, ok: boolean): string {
+  return `${iso} ${session} update check ${Math.round(ms)} ms via ${via} ${ok ? 'ok' : 'failed'}`
 }
 let lastRenderAt = 0
 let loadedSession = '-'
 // When this module loaded, for the render log's "first draw" line.
 let loadedAt = Date.now()
 let firstDrawLogged = false
-let drawsTimed = 0
 let lastRenderError = ''
 let sessionStarted = 0
 // When the app's SessionStart came and what it said, for /effortless debug: a cold band that shows late is either a
@@ -2750,9 +2895,9 @@ async function latestFromGit($: EngineInterface): Promise<{ version: string; not
 }
 /** The newest public release: from git first; where git is missing or offline, public.json on main over the web and the
  * marketplace's own copy after `claude plugin marketplace update`, whichever is newer. */
-async function latestAvailable($: EngineInterface): Promise<{ latest?: { version: string; note: string }; how: string }> {
+async function latestAvailable($: EngineInterface): Promise<{ latest?: { version: string; note: string }; how: string; via?: 'git' | 'web' | 'marketplace' }> {
   const fromGit = await latestFromGit($).catch(() => undefined)
-  if (fromGit) return { latest: fromGit, how: `git ${fromGit.version}` }
+  if (fromGit) return { latest: fromGit, how: `git ${fromGit.version}`, via: 'git' }
   const res = await $.http.fetch(`${RELEASES_URL}&t=${Date.now()}`, { headers: { accept: 'application/vnd.github.raw', 'user-agent': 'effortless' } }).catch((error: unknown) => ({ ok: false, status: 0, text: String(error) }))
   const fromWeb = res.ok ? latestRelease(res.text) : undefined
   const web = res.ok ? (fromWeb ? `web ${fromWeb.version}` : 'web: unreadable') : `web refused (${res.status || res.text.slice(0, 80)})`
@@ -2765,7 +2910,7 @@ async function latestAvailable($: EngineInterface): Promise<{ latest?: { version
   await runClaude($, ['plugin', 'marketplace', 'update', marketplaceOf($)], { timeoutMs: 120_000, env: GITHUB_OVER_HTTPS }).catch(() => null)
   const local = await readLocal()
   const best = fromWeb && (!local || !isNewer(local.version, fromWeb.version)) ? fromWeb : local
-  return { latest: best, how: `git failed; ${web}; marketplace ${local?.version ?? 'unreadable'}` }
+  return { latest: best, how: `git failed; ${web}; marketplace ${local?.version ?? 'unreadable'}`, via: best ? (best === fromWeb ? 'web' : 'marketplace') : undefined }
 }
 /** The session's timers. A reload starts the module over, maybe with no session start (the countdown froze on "Cold"),
  * so the band's first draw starts them too. A session start always starts them: a timer started inside a request may
@@ -2804,6 +2949,7 @@ function startTimers($: EngineInterface, from: 'start' | 'draw') {
         }
       })
     void writeRenderLog($).catch(() => undefined)
+    void writeTimingLog($).catch(() => undefined)
     void finishHandoff($).catch(() => undefined)
   })
 }
@@ -2829,13 +2975,34 @@ async function afterLoad($: EngineInterface) {
   }
   await checkUpdate($)
 }
+/** Which way an update check found the version; `none` when it failed before any way was tried. */
+type UpdateVia = 'git' | 'web' | 'marketplace' | 'skipped' | 'none'
+type UpdateOutcome = { via: UpdateVia; ok: boolean }
+/** The look for a newer version, timed in the timing log: how long, and which way the version was found. It counts as
+ * ok only where a version was found and the look then ran to its end. */
 async function checkUpdate($: EngineInterface) {
+  const startedAt = performance.now()
+  const outcome: UpdateOutcome = { via: 'none', ok: false }
+  let isDone = false
+  try {
+    await checkUpdateLook($, outcome)
+    isDone = true
+  } finally {
+    timingAdd(updateLine(new Date().toISOString(), loadedSession, performance.now() - startedAt, outcome.via, outcome.ok && isDone))
+  }
+}
+async function checkUpdateLook($: EngineInterface, outcome: UpdateOutcome) {
   const shown = await read($, updateCard)
   if (shown && shown.stage !== 'offer') {
     lastUpdateCheck = `skipped while the ${shown.stage} card shows`
+    outcome.via = 'skipped'
+    outcome.ok = true
     return
   }
-  const { latest, how } = await latestAvailable($)
+  const { latest, how, via } = await latestAvailable($)
+  // No way gave a version: the marketplace copy is the last one tried.
+  outcome.via = via ?? 'marketplace'
+  outcome.ok = latest !== undefined
   const mine = await installedVersion($)
   lastUpdateCheck = `installed ${mine ?? 'unreadable'}; ${how}`
   if (!latest || !mine || !isNewer(latest.version, mine)) {
@@ -3857,7 +4024,20 @@ async function haikuHandoff($: EngineInterface, messages: Parameters<typeof comp
 export const register: Register = (on, options) => {
   loadedAt = Date.now()
   firstDrawLogged = false
-  drawsTimed = 0
+  // A load starts its logs over: the chat is not known until a session start or the id is asked for.
+  loadedSession = '-'
+  sessionAsk = undefined
+  renderLog.length = 0
+  renderLogDropped = 0
+  renderLogSaved = 0
+  renderLogWriting = false
+  renderLogNoDir = false
+  timing = newTimingBuffer()
+  timingWriting = false
+  // Tells this load's timing files from another load's of the same chat (a reload keeps the chat, not the module).
+  loadId = globalThis.crypto.randomUUID().replaceAll('-', '').slice(0, 8)
+  drawAskedAt.clear()
+  drawsBySurface.clear()
   config = readConfig(options)
   applyTheme()
   pluginOptions = options
@@ -4588,6 +4768,20 @@ Saved to ${out}.md and .json` }
   // for it at all and whether drawing failed: an error here otherwise only leaves the slot empty.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Setup changes a reload cut off are saved from here: the reloaded plugin draws before anything else runs.
+    // Timed from the first line, on this call's own clock: draws overlap, and a shared start was overwritten by the next.
+    // Per surface: the terminal and the desktop draw on their own beats.
+    const drawStartedAt = performance.now()
+    const surface = String(e.surface ?? '?')
+    const lastAskedAt = drawAskedAt.get(surface)
+    const sinceLastAsk = lastAskedAt === undefined ? -1 : drawStartedAt - lastAskedAt
+    drawAskedAt.set(surface, drawStartedAt)
+    // Its place among the draws of its surface, taken as it is asked for: a draw that ends after later ones is still the first.
+    const drawsSoFar = (drawsBySurface.get(surface) ?? 0) + 1
+    drawsBySurface.set(surface, drawsSoFar)
+    let drawFailed = false
+    // The app's own draw, where this call hands on to it: awaited only in the timing, the call returns it as it did.
+    let handed: Promise<unknown> | undefined
+    try {
     void drainSetupSave($).catch(() => undefined)
     void afterLoad($).catch(() => undefined)
     await restoreCache($).catch(() => undefined)
@@ -4604,7 +4798,7 @@ Saved to ${out}.md and .json` }
     try {
     if (e.props.hasSurvey) {
       lastRenderBranch = 'stepped aside: the app has a survey in this spot'
-      return next(e)
+      return (handed = next(e))
     }
     const asked = await $.store.get('openSettingsAt')
     const askedHere =
@@ -5489,21 +5683,29 @@ Saved to ${out}.md and .json` }
     // The minimal look draws no dashboard: mark the rest here, so the next band plays its entrance.
     introKind = 'rest'
     const { question, rows } = await effortRows($, e)
-    if (e.surface !== 'terminal') return question ?? next(e)
+    if (e.surface !== 'terminal') return question ?? (handed = next(e))
     return rows
     } catch (error) {
+      drawFailed = true
       lastRenderError = (error instanceof Error ? error.message : String(error)).slice(0, 300)
-      return next(e)
+      return (handed = next(e))
     } finally {
       if (glowReadAt !== null) {
         drawLead = drawLead * 0.7 + Math.min(150, Date.now() - glowReadAt + 16) * 0.3
         glowReadAt = null
       }
-      // How long the draws take, for the first few after a load: the render log says where a slow start goes.
-      if (drawsTimed < 5) {
-        drawsTimed++
-        renderLog.push(`${new Date().toISOString()} ${loadedSession} draw took ${Date.now() - lastRenderAt} ms`)
-      }
+    }
+    } catch (error) {
+      // Anything thrown before the inner try (or by it, past its catch) goes out as it did; it only marks the draw failed.
+      drawFailed = true
+      throw error
+    } finally {
+      // The time includes the app's own draw, where this call handed on to it; its failure is the app's, not rethrown here.
+      if (handed) await handed.catch(() => { drawFailed = true })
+      // How long the draws take, for the draws a load makes: the timing log says where a slow start goes.
+      // Kept: a failed draw, the first five of a surface, any slow draw (200 ms), and any draw after a long quiet.
+      const tookMs = Math.round(performance.now() - drawStartedAt)
+      if (drawLogged(drawsSoFar, tookMs, Math.round(sinceLastAsk), drawFailed)) timingAdd(drawLine(new Date().toISOString(), loadedSession, tookMs, sinceLastAsk, drawFailed))
     }
   })
 }

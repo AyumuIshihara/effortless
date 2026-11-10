@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -3641,17 +3641,18 @@ describe('a message typed while a turn runs', () => {
 describe('updates', () => {
   const DESK = { options: { layout: 'default' } } as never
   /** A session with `installed` on disk and `latest` on main; records what the mod runs. */
-  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; noRepo?: boolean; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string> }) {
+  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; noRepo?: boolean; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string>; webDown?: boolean; noMarketplaceCopy?: boolean }) {
     engine(on, v.env)
     const clock = mock.clock(on)
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
     on('fs.read', (_$, e) => {
       if (String(e.path).replaceAll('\\', '/').endsWith('.claude-plugin/plugin.json')) return { value: JSON.stringify({ version: v.installed }) } as never
       if (v.installPath && String(e.path).replaceAll('\\', '/').endsWith('installed_plugins.json')) return { value: JSON.stringify({ plugins: { 'effortless@effortless-ayumu': [{ installPath: v.installPath }] } }) } as never
-      if (String(e.path).replaceAll('\\', '/').endsWith('marketplaces/effortless-ayumu/public.json')) return { value: JSON.stringify([{ version: v.latest, note: 'Quick and Full as one switch.' }]) } as never
+      if (!v.noMarketplaceCopy && String(e.path).replaceAll('\\', '/').endsWith('marketplaces/effortless-ayumu/public.json')) return { value: JSON.stringify([{ version: v.latest, note: 'Quick and Full as one switch.' }]) } as never
       return { value: '' } as never
     })
     on('http.fetch', (_$, e) => {
+      if (v.webDown) return { value: { status: 503, ok: false, headers: {}, text: 'down https://example.test/secret' } } as never
       if (String(e.url).includes('public.json'))
         return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify([{ version: v.latest, date: '2026-10-07', note: 'Quick and Full as one switch.' }]) } } as never
       return { value: { status: 404, ok: false, headers: {}, text: '' } } as never
@@ -3776,6 +3777,78 @@ describe('updates', () => {
     expect(origin).toBeGreaterThan(init)
     expect(fetch).toBeGreaterThan(origin)
     expect(w.ran.some(r => r.includes('HeyCubit'))).toBe(false)
+  })
+
+  /** The timing log the mod writes, read back after a second has passed on the clock. */
+  async function renderLogAfter(w: { clock: { advance: (ms: number) => Promise<unknown> } }, on: On) {
+    const written: Record<string, string> = {}
+    on('session.id', () => ({ value: 'abcdef12-3456-7890-abcd-ef1234567890' }) as never)
+    on('ui.toast', () => ({ value: undefined }) as never)
+    on('fs.write', (_$, e) => {
+      written[String(e.path).split('\\').join('/')] = String(e.text)
+      return { value: undefined } as never
+    })
+    return async () => {
+      await w.clock.advance(1000)
+      await settle()
+      await w.clock.advance(1000)
+      return Object.entries(written).filter(([p]) => p.includes('effortless-timing-')).map(([, text]) => text).join('')
+    }
+  }
+  const updateLines = (log: string) => log.split('\n').filter(l => l.includes(' update check '))
+  const UPDATE_LINE = /^\d{4}-\d\d-\d\dT[\d:.]+Z \S+ update check \d+ ms via (git|web|marketplace|skipped|none) (ok|failed)$/
+
+  test('the update check is timed in the timing log: found by git', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.1', git: JSON.stringify([{ version: '1.0.2', note: 'From git.' }]), env: { USERPROFILE: 'C:/Users/x' } })
+    const read = await renderLogAfter(w, on)
+    await start($)
+    await settle()
+    const lines = updateLines(await read())
+    expect(lines.length).toBeGreaterThan(0)
+    expect(lines.every(l => UPDATE_LINE.test(l))).toBe(true)
+    expect(lines[0]).toMatch(/ via git ok$/)
+  })
+
+  test('the update check says web when git fails and the web answers', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.2', fails: 'no git', env: { USERPROFILE: 'C:/Users/x' } })
+    const read = await renderLogAfter(w, on)
+    await start($)
+    await settle()
+    expect(updateLines(await read())[0]).toMatch(/ via web ok$/)
+  })
+
+  test('the update check says marketplace when git and the web both fail', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.2', fails: 'no git', webDown: true, env: { USERPROFILE: 'C:/Users/x' } })
+    const read = await renderLogAfter(w, on)
+    await start($)
+    await settle()
+    expect(updateLines(await read())[0]).toMatch(/ via marketplace ok$/)
+  })
+
+  test('the update check says failed when no way gives a version, and never carries the error text', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.2', fails: 'no git', webDown: true, noMarketplaceCopy: true, env: { USERPROFILE: 'C:/Users/x' } })
+    const read = await renderLogAfter(w, on)
+    await start($)
+    await settle()
+    const log = await read()
+    const lines = updateLines(log)
+    expect(lines[0]).toMatch(/ failed$/)
+    expect(lines.every(l => UPDATE_LINE.test(l))).toBe(true)
+    expect(log).not.toContain('example.test')
+  })
+
+  test('the update check says skipped while an update card other than the offer shows', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1', env: { USERPROFILE: 'C:/Users/x' } })
+    const read = await renderLogAfter(w, on)
+    await start($)
+    await settle()
+    // The preview card in its Updated look, then a look for a newer version.
+    await $.command.run({ command: 'effortless', args: 'card done' } as never)
+    const res = await $.command.run({ command: 'effortless', args: 'update' } as never)
+    expect(res.text).toContain('skipped while the done card shows')
+    const lines = updateLines(await read())
+    expect(lines.some(l => / via skipped ok$/.test(l))).toBe(true)
+    expect(lines.every(l => UPDATE_LINE.test(l))).toBe(true)
   })
 
   test('marketplaceFromRoot reads the marketplace off the cache path, with either slash', () => {
@@ -4405,5 +4478,408 @@ describe('theme', () => {
     } finally {
       setTheme('violet')
     }
+  })
+})
+
+describe('timing log', () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 30))
+  const start = async ($: Engine, on: On) => {
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
+  }
+  /** Records every write (path -> last text) and every attempt. `failFirst` makes the first attempts fail, `failing.on`
+   * all of them while it is set; `gate` holds the first write of a timing part until it is released. Writes of the
+   * timing log are counted apart from the render log's: each log has one write at a time. */
+  function files(on: On, opts: { failFirst?: number; gate?: Promise<void>; noId?: boolean } = {}) {
+    // A chat the app names, for the file.
+    on('session.id', () => (opts.noId ? ({ deny: 'no session' } as never) : ({ value: 'abcdef12-3456-7890-abcd-ef1234567890' } as never)))
+    const written: Record<string, string> = {}
+    const attempts: string[] = []
+    const failing = { on: false }
+    let failures = opts.failFirst ?? 0
+    let live = 0
+    let most = 0
+    let gate = opts.gate
+    on('fs.write', async (_$, e) => {
+      const path = String(e.path).split('\\').join('/')
+      attempts.push(path)
+      const isTiming = path.includes('effortless-timing-')
+      if (isTiming) {
+        live++
+        most = Math.max(most, live)
+      }
+      try {
+        const waiting = isTiming ? gate : undefined
+        if (waiting) gate = undefined
+        if (waiting) await waiting
+        if (failing.on || failures > 0) {
+          failures--
+          return { deny: 'disk full' } as never
+        }
+        written[path] = String(e.text)
+        return { value: undefined } as never
+      } finally {
+        if (isTiming) live--
+      }
+    })
+    return { written, attempts, failing, most: () => most }
+  }
+  const renderLogOf = (written: Record<string, string>) => Object.entries(written).find(([p]) => p.includes('effortless-render-'))?.[1] ?? ''
+  /** The timing parts written, in part order. */
+  const partsOf = (written: Record<string, string>) =>
+    Object.entries(written)
+      .filter(([p]) => p.includes('effortless-timing-'))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([path, text]) => ({ path, lines: text.split('\n').filter(l => l !== '') }))
+  const allLines = (written: Record<string, string>) => partsOf(written).flatMap(p => p.lines)
+  const timed = (lines: string[]) => lines.filter(l => l.includes(' draw took '))
+  const DRAW = new RegExp(String.raw`^\d{4}-\d\d-\d\dT[\d:.]+Z (\S+) draw took (\d+) ms gap (-?\d+) ms (ok|failed)$`)
+  const TIMING_FILE = /^C:\/Users\/x\/\.claude\/effortless-timing-abcdef12-[0-9a-f]{8}-(\d{3})\.log$/
+  const SURVEY = { ...(DESK_BAND as object), props: { ...BAND.props, hasSurvey: true } } as never
+  const bandOn = (surface: string) => ({ plugin: 'effortless', surface, ...BAND }) as never
+  const drawOn = async ($: Engine, surface: string, times = 1) => {
+    for (let i = 0; i < times; i++) await (await $.ui.mount(bandOn(surface))).unmount()
+  }
+  /** Update checks that end at once (the preview card is up): each leaves a line, so a few hundred make a few parts. */
+  const manyLines = async ($: Engine, times: number) => {
+    await $.command.run({ command: 'effortless', args: 'card done' } as never)
+    for (let i = 0; i < times; i++) await $.command.run({ command: 'effortless', args: 'update' } as never)
+  }
+  const seconds = async (mocked: { advance: (ms: number) => Promise<unknown> }, n: number) => {
+    for (let i = 0; i < n; i++) {
+      await mocked.advance(1000)
+      await settle()
+    }
+  }
+
+  test('the lines for a draw and for an update check: rounded ms, the gap, how it ended', () => {
+    expect(drawLine('2026-11-10T12:00:00.000Z', '69d01d55', 51.4, -1, false)).toBe('2026-11-10T12:00:00.000Z 69d01d55 draw took 51 ms gap -1 ms ok')
+    expect(drawLine('2026-11-10T12:00:00.000Z', '69d01d55', 300.6, 5000.2, true)).toBe('2026-11-10T12:00:00.000Z 69d01d55 draw took 301 ms gap 5000 ms failed')
+    expect(DRAW.test(drawLine('2026-11-10T12:00:00.000Z', '69d01d55', 51, -1, false))).toBe(true)
+    expect(updateLine('2026-11-10T12:00:00.000Z', '69d01d55', 812.4, 'web', true)).toBe('2026-11-10T12:00:00.000Z 69d01d55 update check 812 ms via web ok')
+    expect(updateLine('2026-11-10T12:00:00.000Z', '69d01d55', 3, 'marketplace', false)).toBe('2026-11-10T12:00:00.000Z 69d01d55 update check 3 ms via marketplace failed')
+    expect(updateLine('2026-11-10T12:00:00.000Z', '69d01d55', 3, 'none', false)).toBe('2026-11-10T12:00:00.000Z 69d01d55 update check 3 ms via none failed')
+  })
+
+  test('a draw is kept when failed, among the first five of its surface, slow (200 ms), or after a long gap (5000 ms)', () => {
+    for (const n of [1, 2, 3, 4, 5]) expect(drawLogged(n, 5, 20)).toBe(true)
+    expect(drawLogged(6, 5, 20)).toBe(false)
+    expect(drawLogged(60, 199, 4999)).toBe(false)
+    expect(drawLogged(6, 200, 20)).toBe(true)
+    expect(drawLogged(6, 5, 5000)).toBe(true)
+    // The first draw has no earlier ask (gap -1) and is still among the first five.
+    expect(drawLogged(1, 0, -1)).toBe(true)
+    // A failed draw is kept whatever it took and however soon it came.
+    expect(drawLogged(60, 5, 20, true)).toBe(true)
+  })
+
+  test('the log folder keeps a root as given, and drops a trailing separator elsewhere', () => {
+    expect(logDirOf('D:\\cfg\\', 'C:/Users/x')).toBe('D:\\cfg')
+    expect(logDirOf('D:/cfg//', 'C:/Users/x')).toBe('D:/cfg')
+    expect(logDirOf('C:\\', undefined)).toBe('C:\\')
+    expect(logDirOf('\\', undefined)).toBe('\\')
+    expect(logDirOf('/', undefined)).toBe('/')
+    expect(logDirOf('  ', 'C:/Users/x')).toBe('C:/Users/x/.claude')
+    expect(logDirOf(undefined, undefined)).toBeUndefined()
+    // A drive alone stays as given, and the file goes right after it.
+    expect(logDirOf('C:', undefined)).toBe('C:')
+    expect(logFileOf('C:', renderLogName('abcdef12'))).toBe('C:effortless-render-abcdef12.log')
+    expect(logFileOf('C:\\', renderLogName('abcdef12'))).toBe('C:\\effortless-render-abcdef12.log')
+    expect(logFileOf('D:\\cfg', renderLogName('abcdef12'))).toBe('D:\\cfg/effortless-render-abcdef12.log')
+    expect(logFileOf('D:\\cfg', timingLogName('abcdef12', '0a1b2c3d', 7))).toBe('D:\\cfg/effortless-timing-abcdef12-0a1b2c3d-007.log')
+    expect(logFileOf('/', timingLogName('abcdef12', '0a1b2c3d', 123))).toBe('/effortless-timing-abcdef12-0a1b2c3d-123.log')
+  })
+
+  test('lines made before the chat was known take its id when written', () => {
+    expect(namedLines(['2026-11-10T12:00:00.000Z - draw took 5 ms gap -1 ms ok', '2026-11-10T12:00:00.500Z ? update check 5 ms via git ok', '2026-11-10T12:00:01.000Z 69d01d55 draw took 5 ms gap 9 ms ok'], 'abcdef12')).toEqual([
+      '2026-11-10T12:00:00.000Z abcdef12 draw took 5 ms gap -1 ms ok',
+      '2026-11-10T12:00:00.500Z abcdef12 update check 5 ms via git ok',
+      '2026-11-10T12:00:01.000Z 69d01d55 draw took 5 ms gap 9 ms ok',
+    ])
+  })
+
+  test('a part takes 500 lines, then the next one starts; a written part leaves the memory, an unwritten one stays', () => {
+    const buf = newTimingBuffer()
+    for (let i = 0; i < 1203; i++) pushTiming(buf, `line ${i}`, 'T', 's')
+    expect(buf.parts.map(p => [p.no, p.lines.length])).toEqual([[1, 500], [2, 500], [3, 203]])
+    expect(buf.parts[0]!.lines[0]).toBe('line 0')
+    expect(buf.parts[1]!.lines[0]).toBe('line 500')
+    buf.parts[0]!.saved = 500
+    buf.parts[1]!.saved = 500
+    for (let i = 0; i < 300; i++) pushTiming(buf, `more ${i}`, 'T', 's')
+    // Parts 1 and 2 are written and gone; part 3 is full and unwritten; part 4 is the new one.
+    expect(buf.parts.map(p => [p.no, p.lines.length])).toEqual([[3, 500], [4, 3]])
+    expect(buf.dropped).toBe(0)
+  })
+
+  test('with six parts unwritten the oldest goes, and the new part opens with how many went', () => {
+    const buf = newTimingBuffer()
+    for (let i = 0; i < 5 * 500; i++) pushTiming(buf, `line ${i}`, 'T', 's')
+    expect(buf.parts.map(p => p.no)).toEqual([1, 2, 3, 4, 5])
+    pushTiming(buf, 'line next', '2026-11-10T12:00:00.000Z', 'abcdef12')
+    expect(buf.parts.map(p => p.no)).toEqual([2, 3, 4, 5, 6])
+    expect(buf.dropped).toBe(1)
+    expect(buf.parts[4]!.lines).toEqual(['2026-11-10T12:00:00.000Z abcdef12 dropped parts=1', 'line next'])
+    // Another full round: the count is the total so far.
+    for (let i = 0; i < 498; i++) pushTiming(buf, 'x', 'T', 's')
+    expect(buf.parts[4]!.lines.length).toBe(500)
+    pushTiming(buf, 'y', '2026-11-10T12:01:00.000Z', 'abcdef12')
+    expect(buf.dropped).toBe(2)
+    expect(buf.parts[4]!.lines[0]).toBe('2026-11-10T12:01:00.000Z abcdef12 dropped parts=2')
+    expect(buf.parts.map(p => p.no)).toEqual([3, 4, 5, 6, 7])
+    // Once the pending ones are written, the next part starts clean.
+    for (const p of buf.parts) p.saved = p.lines.length
+    for (let i = 0; i < 498; i++) pushTiming(buf, 'z', 'T', 's')
+    pushTiming(buf, 'w', 'T', 's')
+    expect(buf.parts[buf.parts.length - 1]!.lines).toEqual(['w'])
+    expect(buf.dropped).toBe(2)
+  })
+
+  test('only the first five quick draws of a surface are logged; overlapping draws each get a line with their own gap', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    await start($, on)
+    // Two draws asked together: both are in flight at once.
+    await Promise.all([$.ui.mount(DESK_BAND), $.ui.mount(DESK_BAND)])
+    await drawOn($, 'desktop', 6)
+    await seconds(mocked, 1)
+    const lines = timed(allLines(f.written))
+    expect(lines.every(l => DRAW.test(l))).toBe(true)
+    const gaps = lines.map(l => Number(DRAW.exec(l)![3]))
+    // The first ask has no earlier one; the rest are measured from the previous ask, never from a shared start.
+    expect(gaps.filter(g => g === -1).length).toBe(1)
+    expect(gaps.every(g => g >= -1)).toBe(true)
+    // The first five are kept; after that only a slow draw or a long gap (a slow machine may keep more, never fewer).
+    expect(lines.length).toBeGreaterThanOrEqual(5)
+    expect(lines.length).toBe(5 + lines.slice(5).filter(l => Number(DRAW.exec(l)![2]) >= 200 || Number(DRAW.exec(l)![3]) >= 5000).length)
+  })
+
+  test('the gap and the first five are counted per surface', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    await start($, on)
+    await drawOn($, 'desktop', 2)
+    await drawOn($, 'vscode')
+    await drawOn($, 'desktop', 4)
+    await drawOn($, 'vscode', 5)
+    await seconds(mocked, 1)
+    const lines = timed(allLines(f.written))
+    const gaps = lines.map(l => Number(DRAW.exec(l)![3]))
+    // 6 desktop draws and 6 on the other surface: five of each are kept (slow ones may add), and each surface has one -1.
+    expect(gaps.filter(g => g === -1).length).toBe(2)
+    expect(gaps[0]).toBe(-1)
+    expect(gaps[1]).toBeGreaterThanOrEqual(0)
+    // The first draw on the other surface has no earlier ask, though desktop drew before it.
+    expect(gaps[2]).toBe(-1)
+    expect(lines.length).toBeGreaterThanOrEqual(10)
+  })
+
+  test('a draw that hands on to the app (a survey) leaves a line', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    await start($, on)
+    const ui = await $.ui.mount(SURVEY)
+    await ui.unmount()
+    await seconds(mocked, 1)
+    const survey = timed(allLines(f.written))
+    expect(survey.length).toBe(1)
+    expect(survey[0]).toMatch(DRAW)
+  })
+
+  test('the timing lines go to the timing file; the render log keeps its own lines and none of them', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    await start($, on)
+    await drawOn($, 'desktop', 3)
+    await seconds(mocked, 2)
+    const render = renderLogOf(f.written)
+    expect(render).toContain('session.start')
+    expect(render).toContain('first draw asked')
+    expect(render).not.toContain(' draw took ')
+    expect(render).not.toContain(' update check ')
+    const parts = partsOf(f.written)
+    expect(parts.length).toBe(1)
+    expect(parts[0]!.path).toMatch(TIMING_FILE)
+    expect(parts[0]!.path.endsWith('-001.log')).toBe(true)
+    expect(parts[0]!.lines.every(l => / (draw took|update check) /.test(l))).toBe(true)
+    expect(timed(parts[0]!.lines).length).toBe(3)
+    // Nothing is written under a name shared by the chats or the loads.
+    expect(Object.keys(f.written).every(p => /effortless-(render-abcdef12|timing-abcdef12-[0-9a-f]{8}-\d{3})\.log$/.test(p))).toBe(true)
+  })
+
+  test('a load names its timing files with one id of eight hex characters', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    await start($, on)
+    await drawOn($, 'desktop')
+    await seconds(mocked, 1)
+    const names = Object.keys(f.written).filter(p => p.includes('effortless-timing-'))
+    expect(names.length).toBe(1)
+    expect(names[0]).toMatch(TIMING_FILE)
+  })
+
+  test('500 lines make a part and the next lines the next part, and the earlier part stays as written', { timeoutMs: 120_000 }, async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    await start($, on)
+    // 600 update checks: each leaves a line.
+    await manyLines($, 600)
+    await seconds(mocked, 3)
+    const parts = partsOf(f.written)
+    expect(parts.length).toBeGreaterThanOrEqual(2)
+    expect(parts.map(p => TIMING_FILE.exec(p.path)![1])).toEqual(parts.map((_, i) => String(i + 1).padStart(3, '0')))
+    expect(parts[0]!.lines.length).toBe(500)
+    expect(parts[1]!.lines.length).toBeGreaterThan(0)
+    expect(parts[0]!.lines[0]).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z abcdef12 (draw took|update check) /)
+    expect(parts.flatMap(p => p.lines).filter(l => / update check /.test(l)).length).toBeGreaterThanOrEqual(600)
+    expect(f.most()).toBe(1)
+  })
+
+  test('a write that keeps failing: the sixth part drops the oldest, and the part after says how many', { timeoutMs: 300_000 }, async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    f.failing.on = true
+    await start($, on)
+    // 3100 update checks: seven parts.
+    await manyLines($, 3100)
+    await seconds(mocked, 2)
+    // A failed write saved nothing; the disk comes back and what is left goes out.
+    expect(Object.keys(f.written).length).toBe(0)
+    expect(f.attempts.some(p => p.includes('effortless-timing-'))).toBe(true)
+    f.failing.on = false
+    await seconds(mocked, 8)
+    const parts = partsOf(f.written)
+    const numbers = parts.map(p => Number(TIMING_FILE.exec(p.path)![1]))
+    // The first parts were never kept: none of them is among the files, and the last part opens with the count.
+    expect(numbers.length).toBeLessThanOrEqual(5)
+    expect(numbers[0]).toBeGreaterThan(1)
+    expect(numbers).toEqual(numbers.map((_, i) => numbers[0]! + i))
+    const dropped = Number(/ dropped parts=(\d+)$/.exec(parts[parts.length - 1]!.lines[0]!)?.[1])
+    expect(dropped).toBe(numbers[0]! - 1)
+    expect(f.most()).toBe(1)
+  })
+
+  test('a failed write is written again the next second, and only one write runs at a time', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on, { failFirst: 3 })
+    await start($, on)
+    await drawOn($, 'desktop')
+    await seconds(mocked, 1)
+    expect(f.attempts.length).toBeGreaterThanOrEqual(1)
+    expect(Object.keys(f.written).length).toBe(0)
+    const tried = f.attempts.length
+    await seconds(mocked, 3)
+    expect(f.attempts.length).toBeGreaterThan(tried)
+    // Both files came out after the failures: the render log and the timing part.
+    expect(renderLogOf(f.written)).toContain('first draw asked')
+    expect(partsOf(f.written).length).toBe(1)
+    expect(timed(partsOf(f.written)[0]!.lines).length).toBe(1)
+    // Saved: nothing new, nothing written.
+    const done = f.attempts.length
+    await seconds(mocked, 2)
+    expect(f.attempts.length).toBe(done)
+    expect(f.most()).toBe(1)
+  })
+
+  test('lines added while a write is on its way are not counted as saved by it', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    let release: () => void = () => undefined
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const f = files(on, { gate })
+    await start($, on)
+    await drawOn($, 'desktop')
+    await seconds(mocked, 1)
+    // The first write is held; draws add lines meanwhile, and more seconds pass without a second write on top.
+    await drawOn($, 'desktop', 3)
+    await seconds(mocked, 2)
+    expect(f.most()).toBe(1)
+    release()
+    await settle()
+    await seconds(mocked, 2)
+    expect(f.most()).toBe(1)
+    expect(timed(allLines(f.written)).length).toBe(4)
+  })
+
+  test('a part that splits while its write is on its way: the saved count stays with that part', { timeoutMs: 120_000 }, async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    let release: () => void = () => undefined
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const f = files(on, { gate })
+    await start($, on)
+    await drawOn($, 'desktop')
+    await seconds(mocked, 1)
+    // The write of part 1 (a few lines) is held while the draws fill it, and part 2 begins.
+    await manyLines($, 600)
+    await seconds(mocked, 1)
+    release()
+    await settle()
+    await seconds(mocked, 6)
+    const parts = partsOf(f.written)
+    expect(parts.length).toBeGreaterThanOrEqual(2)
+    // Part 1 came out whole after the held write that had only a few; part 2 was not taken as written by it.
+    expect(parts[0]!.lines.length).toBe(500)
+    expect(parts[1]!.lines.length).toBeGreaterThan(0)
+    expect(parts.flatMap(p => p.lines).filter(l => / update check /.test(l)).length).toBeGreaterThanOrEqual(600)
+    expect(f.most()).toBe(1)
+  })
+
+  test('with no session start, the chat id is asked for and names the files', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    const ui = await $.ui.mount(DESK_BAND)
+    await seconds(mocked, 2)
+    await ui.unmount()
+    const names = Object.keys(f.written).sort()
+    expect(names.length).toBe(2)
+    expect(names[0]).toBe('C:/Users/x/.claude/effortless-render-abcdef12.log')
+    expect(names[1]).toMatch(TIMING_FILE)
+    // The lines made before the id was known carry it in the file.
+    expect(partsOf(f.written)[0]!.lines.every(l => / abcdef12 /.test(l))).toBe(true)
+  })
+
+  test('with no session start and no chat id, nothing is written (not even under a shared name)', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const f = files(on, { noId: true })
+    const ui = await $.ui.mount(DESK_BAND)
+    await seconds(mocked, 3)
+    await ui.unmount()
+    expect(f.attempts).toEqual([])
+  })
+
+  test('CLAUDE_CONFIG_DIR is where the logs go, a trailing separator dropped', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x', CLAUDE_CONFIG_DIR: 'D:\\cfg\\' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    await start($, on)
+    await drawOn($, 'desktop')
+    await seconds(mocked, 1)
+    expect(f.attempts.length).toBeGreaterThan(0)
+    expect(f.attempts.every(p => /^D:\/cfg\/effortless-(render-[\w-]+|timing-[\w]+-[0-9a-f]{8}-\d{3})\.log$/.test(p))).toBe(true)
+    expect(f.attempts.some(p => p.includes('effortless-timing-'))).toBe(true)
+    expect(f.attempts.some(p => p.includes('.claude'))).toBe(false)
+  })
+
+  test('an empty CLAUDE_CONFIG_DIR falls back to ~/.claude', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x', CLAUDE_CONFIG_DIR: '  ' })
+    const mocked = mock.clock(on)
+    const f = files(on)
+    await start($, on)
+    await drawOn($, 'desktop')
+    await seconds(mocked, 1)
+    expect(f.attempts.length).toBeGreaterThan(0)
+    expect(f.attempts.every(p => p.startsWith('C:/Users/x/.claude/effortless-'))).toBe(true)
   })
 })
