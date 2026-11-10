@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -2459,6 +2459,34 @@ describe('swamp band and setup entry', () => {
     await start($, on)
     expect(String((await $.command.run({ command: 'effortless', args: 'save' })).text)).toContain('save mode on')
     expect(String((await $.command.run({ command: 'effortless', args: 'save' })).text)).toContain('save mode off')
+  })
+
+  test('judgedWhy: save mode only where it changes what goes out on this model; a lower Max there is your settings', () => {
+    const cfg = { floor: 'low', ceiling: 'medium', fableCeiling: 'xhigh' } as const
+    const v = { effort: 'high', why: 'big refactor' } as const
+    // On Opus the Max is Medium anyway: save mode changed nothing there.
+    expect(judgedWhy(v, 'high', true, 'claude-opus-5-5', cfg)).toBe('your settings')
+    // On Fable High goes out unless save mode brings it down.
+    expect(judgedWhy(v, 'high', true, 'claude-fable-5-2', cfg)).toBe('save mode')
+    expect(judgedWhy(v, 'high', false, 'claude-fable-5-2', cfg)).toBe('big refactor')
+    expect(judgedWhy(v, 'medium', false, 'claude-fable-5-2', cfg)).toBe('your settings')
+  })
+
+  test('the judge is told the effort that runs now, held to Fable max', { options: { fableEffortCeiling: 'medium' } } as never, async ($, on) => {
+    let model = 'claude-opus-5-5'
+    mock.store(on)
+    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    on('prompt.submit', (_$, e) => ({ text: e.text }))
+    on('ui.status', () => ({ value: undefined }))
+    on('session.messages', () => ({ value: [] }) as never)
+    on('session.model', () => ({ value: model }))
+    on('command.list', () => ({ value: [{ name: 'model' }, { name: 'effort' }] as never }))
+    const asked = judgeSays(on, '{"model":"opus","effort":"xhigh","why":"x"}')
+    recordSteps(on)
+    await $.prompt.submit({ text: 'refactor the whole auth module across the app', wait: false, origin: { kind: 'composer' } })
+    model = 'claude-fable-5-2'
+    await $.prompt.submit({ text: 'now port the session store to the new api', wait: false, origin: { kind: 'composer' } })
+    expect(asked[1]).toContain('Current: fable / medium')
   })
 
   test('save mode paints the footer level ember; off again, it is purple', async ($, on) => {

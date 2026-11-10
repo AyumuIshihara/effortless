@@ -1399,6 +1399,14 @@ export function helperCapped(effort: Effort, modelId: string, cfg: { ceiling: Ef
   return EFFORTS.indexOf(effort) > hi ? EFFORTS[hi] : effort
 }
 
+/** The reason shown for Auto's pick on this model: save mode only where it changes what goes out here, your settings
+ * where the slider, Min or this model's Max moved the judge's level, else the judge's own words. */
+export function judgedWhy(verdict: { effort: Effort; why: string }, leaned: Effort, saving: boolean, modelId: string, cfg: { floor: Effort; ceiling: Effort; fableCeiling: Effort | 'same' } = config): string {
+  const atModel = modelCapped(leaned, modelId, cfg)
+  if (capped(atModel, saving) !== atModel) return 'save mode'
+  return leaned !== verdict.effort || atModel !== leaned ? 'your settings' : verdict.why
+}
+
 /** The highest Max any model has: what a helper is judged within before its model is known. */
 export function loosestCeiling(cfg: { ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
   return cfg.fableCeiling !== 'same' && EFFORTS.indexOf(cfg.fableCeiling) > EFFORTS.indexOf(cfg.ceiling) ? cfg.fableCeiling : cfg.ceiling
@@ -2290,7 +2298,7 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
       : [
           v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.by})` : ''}` : 'Auto picks the effort for each message',
           v.current?.why ? `Why: ${v.current.why}` : '',
-          `Lean: ${['much cheaper', 'cheaper', 'as the judge says', 'smarter', 'much smarter'][config.bias + 2]} · range ${config.floor} to ${EFFORTS[Math.max(EFFORTS.indexOf(config.floor), EFFORTS.indexOf(ceilingFor(v.modelNow ?? undefined)))]}`,
+          `Lean: ${['much cheaper', 'cheaper', 'as the judge says', 'smarter', 'much smarter'][config.bias + 2]} · range ${config.floor} to ${EFFORTS[Math.max(EFFORTS.indexOf(config.floor), EFFORTS.indexOf(ceilingFor((v.auto && routed) || v.modelNow || undefined)))]}`,
         ]
           .filter(Boolean)
           .join(' · ')
@@ -4182,9 +4190,11 @@ Saved to ${out}.md and .json` }
     try {
       const inUse = await sessionModel($)
       const startedAt = Date.now()
+      const now = await read($, pick)
       const { verdict, tokens: judgeTokens } = await judge($, shown, {
         model: inUse,
-        effort: (await read($, pick))?.effort ?? 'medium',
+        // What runs now on the model the requests go to, as the mid-turn note says it.
+        effort: now ? goesOut(now, runsOn) : 'medium',
         why: '',
         by: 'manual',
       })
@@ -4207,7 +4217,7 @@ Saved to ${out}.md and .json` }
           // Max of the model it runs on, so a request routed or handed to a model with a higher Max still gets it.
           const leaned = bounded(tipped(verdict.effort, verdict.sure, config.bias), config.floor, loosestCeiling())
           const effort = capped(leaned, saving)
-          const why = effort !== leaned ? 'save mode' : leaned !== verdict.effort ? 'your settings' : verdict.why
+          const why = judgedWhy(verdict, leaned, saving, modelId)
           const applied: Pick = { ...verdict, model: inUse, effort, why }
           // Mid-turn, a lower verdict would cut the running task's effort for its remaining steps: it waits for the
           // turn to end (the queued message may run as a turn of its own). A higher one helps the task, so it applies.
@@ -4313,7 +4323,7 @@ Saved to ${out}.md and .json` }
       const effort = picked && picked.by !== 'manual' && picked.by !== 'named' ? modelCapped(picked.effort, to) : picked?.effort ?? e.effort
       void proof($, `request ${e.index}: ${e.model} -> ${to} at ${effort}`)
       const result = yield* send({ ...e, model: to, effort })
-      if (picked && picked.by !== 'manual' && result.usage) await tally($, effort, result.usage)
+      if (picked && picked.by !== 'manual' && result.usage) await tally($, picked.effort, result.usage)
       return result
     }
     // A helper the judge picked an effort for at its spawn runs every request at it. Haiku takes no effort.
@@ -4352,7 +4362,8 @@ Saved to ${out}.md and .json` }
     const result = yield* send({ ...e, effort })
     // Only requests Auto steered count.
     if (e.agentId === undefined && p.by !== 'manual' && result.usage) {
-      await tally($, effort, result.usage)
+      // Counted under the pick, as the prompt is (countPrompt): cost and count stay in one row of the stats.
+      await tally($, p.effort, result.usage)
       void proof(
         $,
         `response ${e.index} at ${effort}: ${result.usage.output_tokens} out, ${result.usage.cache_read_input_tokens ?? 0} cache read, ${result.usage.cache_creation_input_tokens ?? 0} cache write`,
