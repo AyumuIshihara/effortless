@@ -53,7 +53,7 @@ in `render.mjs`). After an app update it either keeps working or exits and says 
 | `--tree file.json` | | redraw a tree saved earlier (`out/*.tree.json`) without running the mod |
 | `--serve [--port N]` | | keep a local server running and print the page URL (the page applies CSS zoom to match the app) |
 | `--out file.html` | `out/band-<percent>-<width>[-glow].html` | |
-| `--app <ion-dist>` / `--chrome <exe>` | auto | |
+| `--app <ion-dist>` / `--chrome <exe>` | auto | Where the app keeps `ion-dist` packed (`app/resources/ion-dist.asar`, seen in 4.23118), unpack it to a folder outside the app (`npx @electron/asar extract <ion-dist.asar> <folder>`) and pass that folder as `--app` |
 
 ## Limits
 

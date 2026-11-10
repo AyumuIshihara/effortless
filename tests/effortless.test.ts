@@ -3116,6 +3116,35 @@ describe('dashboard', () => {
     await band.unmount()
   })
 
+  test('the blank button over Compact sits in a clipping box that does not shrink it', { options: { layout: 'default' } } as never, async ($, on) => {
+    engine(on)
+    recordSteps(on)
+    const mocked = mock.clock(on)
+    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000, percent: 10 } } }) as never)
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await mocked.advance(16_000)
+    const band = await $.ui.mount(DESK_BAND)
+    // Shrunk, the app cuts the blank label to an ellipsis: white dots on the word under it.
+    const propsOf = (n: Record<string, unknown>) => (n.props ?? n) as Record<string, unknown>
+    const path = (node: unknown, above: Record<string, unknown>[]): Record<string, unknown>[] | undefined => {
+      if (!node || typeof node !== 'object') return undefined
+      if (Array.isArray(node)) return node.map(one => path(one, above)).find(Boolean)
+      const n = node as Record<string, unknown>
+      const isElement = 'props' in n
+      if (isElement && (n.key === 'dash-handoff' || propsOf(n).key === 'dash-handoff')) return above
+      return Object.values(n).map(value => path(value, isElement ? [...above, n] : above)).find(Boolean)
+    }
+    const above = path(await band.drawn(), [])
+    expect(above).toBeDefined()
+    // No-break spaces alone: plain ones collapse to a dot.
+    expect(String((await band.find({ key: 'dash-handoff' }))?.props.label)).toMatch(/^ +$/)
+    const [clip, hold] = above!.slice(-2)
+    expect(propsOf(hold!).flexShrink).toBe(0)
+    expect(propsOf(clip!)).toMatchObject({ overflow: 'hidden', position: 'absolute', flexDirection: 'row' })
+    await band.unmount()
+  })
+
   test('readConfig keeps handoffButton to advised or always', () => {
     expect(readConfig({}).handoffButton).toBe('advised')
     expect(readConfig({ handoffButton: 'always' }).handoffButton).toBe('always')

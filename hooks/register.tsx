@@ -3354,8 +3354,12 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
                 <Box position="absolute" top={0} bottom={0} left={0} right={0} alignItems="center" justifyContent="center">
                   <Text color={handoffLook(handoffLevel()).label} hover={{ scope: 'handoff', color: handoffLook(handoffLevel(), true).label }}>{handoffSlot() ? 'Handoff' : 'Compact'}</Text>
                 </Box>
-                <Box position="absolute" top={0} bottom={0} left={0} right={0} alignItems="center" justifyContent="center">
-                  <Button key="dash-handoff" plain label={' '.repeat(14)} hover={{ scope: 'handoff', backgroundColor: '#00000000' }} onPress={() => (handoffSlot() ? openHandoffBar($) : openCompact($, e))} />
+                {/* The cover that takes the click, as the settings cards' is: in a box that clips it and does not shrink
+                    it. Shrunk, the app cuts its blank label to an ellipsis, white dots on the word. */}
+                <Box position="absolute" top={0} bottom={0} left={0} right={0} flexDirection="row" alignItems="center" justifyContent="center" overflow="hidden">
+                  <Box flexShrink={0}>
+                    <Button key="dash-handoff" plain label={' '.repeat(14)} hover={{ scope: 'handoff', backgroundColor: '#00000000' }} onPress={() => (handoffSlot() ? openHandoffBar($) : openCompact($, e))} />
+                  </Box>
                 </Box>
               </Box>
             </Box>

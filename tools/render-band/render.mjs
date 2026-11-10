@@ -266,8 +266,9 @@ function rendererNames(src) {
       `${esc(names.buildTree)}\\(${id},${id}\\.handlers,${id},${id},(${id})\\(${id}\\),${id}\\.liftsHoverCards`)
   }
   // Writes the collected hover rules into one <style>, wrapped in @media (hover:hover).
+  // Newer builds take a third list, the rules that hold with or without a pointer (the collector's allRules).
   find('applyHover', 'the hover-rule writer (one <style> with @media (hover:hover){...})',
-    `function (${id})\\((${id}),(${id})\\)\\{let ${id}=\\3\\.length===0\\?"":\`@media \\(hover:hover\\)\\{`)
+    `function (${id})\\((${id}),(${id})(?:,${id})?\\)\\{let ${id}=\\(?\\3\\.length===0\\?"":\`@media \\(hover:hover\\)\\{`)
   return names
 }
 
@@ -301,6 +302,9 @@ function findApp() {
     const loc = execFileSync('powershell', ['-NoProfile', '-Command', '(Get-AppxPackage -Name Claude).InstallLocation'], { encoding: 'utf8' }).trim()
     const dir = join(loc.split(/\r?\n/).pop(), 'app', 'resources', 'ion-dist')
     if (existsSync(join(dir, 'index.html'))) return dir
+    // Newer builds ship it packed: the folder has to be unpacked first, outside the app.
+    if (existsSync(`${dir}.asar`))
+      fail(`the Claude desktop app keeps ion-dist packed (${dir}.asar); unpack it (npx @electron/asar extract <that file> <folder>) and pass --app <folder>`)
   } catch {}
   fail('could not find the Claude desktop app; pass --app <...>/app/resources/ion-dist')
 }

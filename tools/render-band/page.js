@@ -118,7 +118,7 @@
         if (!drawn.matches('a[href],button,input,select,textarea')) drawn.setAttribute('tabindex', '-1')
         root.insertBefore(drawn, root.children[1] ?? null)
       }
-      app.applyHover(root, marks.hoverRules)
+      app.applyHover(root, marks.hoverRules, marks.allRules ?? [])
     }
     draw(R.tree)
     // --trace: replay the recorded redraws at their clock times (ms after the first act). Renders inside one act come

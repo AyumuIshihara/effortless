@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.72.3",
+    "date": "2026-11-10",
+    "note": "The click cover on Compact is clipped, not shrunk",
+    "detail": [
+      "The blank button that takes the click on Compact and Handoff sits in a clipping box that does not shrink it, as the settings cards' covers do. Meant to stop the white dots seen on the word; not confirmed in the app yet."
+    ],
+    "public": true
+  },
+  {
     "version": "1.72.2",
     "date": "2026-11-10",
     "note": "The settings header says fork",
