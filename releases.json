@@ -4,7 +4,7 @@
     "date": "2026-11-10",
     "note": "Fable gets a Max of its own",
     "detail": [
-      "Settings → Effort has Fable max beside Min and Max: Auto never picks above it on Fable, helpers included. Same as Max by default, and a higher Min still wins; a level named in the prompt still runs past it."
+      "Settings → Effort has Fable max beside Min and Max: Auto never picks above it on Fable, helpers included. Same as Max by default. A higher Min still wins, except for a subagent Helpers judges on its own, where Max wins as before; a level named in the prompt still runs past it."
     ],
     "public": true
   },

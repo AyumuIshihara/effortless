@@ -1008,6 +1008,9 @@ describe('cache guard', () => {
     expect(heldToModel({ ...p, by: 'manual' }, null, 'fable', opts).current?.effort).toBe('xhigh')
     expect(heldToModel(p, { from: 'high', to: 'xhigh' }, 'fable', opts).switchedNow).toBeNull()
     expect(heldToModel(p, { from: 'low', to: 'xhigh' }, 'fable', opts).switchedNow).toEqual({ from: 'low', to: 'medium' })
+    // A switch between your pick and Auto's holds only Auto's end.
+    expect(heldToModel(p, { from: 'max', to: 'xhigh', fromAuto: false, toAuto: true }, 'fable', opts).switchedNow).toEqual({ from: 'max', to: 'medium' })
+    expect(heldToModel({ ...p, by: 'named', effort: 'high' }, { from: 'xhigh', to: 'high', fromAuto: true, toAuto: false }, 'fable', opts).switchedNow).toEqual({ from: 'medium', to: 'high' })
     // For helpers Max wins over Min, as helperFloor has it.
     expect(helperCapped('high', 'claude-fable-5-2', { ceiling: 'max', fableCeiling: 'low' })).toBe('low')
     expect(helperCapped('high', 'claude-opus-5-5', { ceiling: 'max', fableCeiling: 'low' })).toBe('high')
@@ -1058,6 +1061,43 @@ describe('cache guard', () => {
     }
     expect(sent.map(s => s.effort)).toEqual(['xhigh', 'medium', 'xhigh'])
     await footer.unmount()
+  })
+
+  test('on a Fable chat, Auto keeps the judged level for a subagent on Opus, whose Max is higher', { options: { fableEffortCeiling: 'medium' } } as never, async ($, on) => {
+    engine(on, {}, 'claude-fable-5-2')
+    judgeSays(on, '{"model":"fable","effort":"xhigh","why":"x"}')
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
+    for (const [model, agentId] of [['claude-fable-5-2', undefined], ['claude-opus-5-5', 'o1']] as const) {
+      for await (const _ of $.turn.step({ turnId: 't1', index: 0, model, effort: 'high', messageCount: 1, ...(agentId ? { agentId } : {}) } as never)) {
+        // drain
+      }
+    }
+    expect(sent.map(s => s.effort)).toEqual(['medium', 'xhigh'])
+  })
+
+  test('typed mid-turn on Fable, a named level above what runs there raises the turn at once', { options: { fableEffortCeiling: 'medium' } } as never, async ($, on) => {
+    let model = 'claude-opus-5-5'
+    mock.store(on)
+    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    on('prompt.submit', (_$, e) => ({ text: e.text }))
+    on('ui.status', () => ({ value: undefined }))
+    on('session.messages', () => ({ value: [] }) as never)
+    on('session.model', () => ({ value: model }))
+    on('command.list', () => ({ value: [{ name: 'model' }, { name: 'effort' }] as never }))
+    judgeSays(on, '{"model":"opus","effort":"xhigh","why":"x"}')
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'refactor the whole auth module across the app', wait: false, origin: { kind: 'composer' } })
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model, effort: 'high', messageCount: 1 })) {
+      // drain
+    }
+    model = 'claude-fable-5-2'
+    await $.prompt.submit({ text: 'high effort: also check the callers', wait: false, turnId: 't1', origin: { kind: 'composer' } } as never)
+    for await (const _ of $.turn.step({ turnId: 't1', index: 1, model, effort: 'high', messageCount: 1 })) {
+      // drain
+    }
+    // XHigh runs as Medium on Fable, so High raises it and is not held for the turn's end.
+    expect(sent.map(s => s.effort)).toEqual(['xhigh', 'high'])
   })
 
   test('a named level on Fable runs past Fable max', { options: { fableEffortCeiling: 'medium' } } as never, async ($, on) => {

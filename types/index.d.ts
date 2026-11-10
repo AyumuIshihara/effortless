@@ -138,7 +138,8 @@ declare module 'claude-code' {
       /** Auto on effort: every prompt is judged and its effort applied. */
       isAuto: boolean
       /** The last change Auto made to the effort, shown for a moment as "Low → High". */
-      switched: { from: Effort; to: Effort } | null
+      /** fromAuto, toAuto: whether each end was Auto's pick (held to the model's Max when shown) or yours. */
+      switched: { from: Effort; to: Effort; fromAuto?: boolean; toAuto?: boolean } | null
       /** What the prompts Auto steered cost this session, measured (see Spent). */
       saved: Spent
       /** The session runs a model where an effort change rewrites the prompt cache: Auto waits. */

@@ -2168,7 +2168,7 @@ async function choose($: EngineInterface, next: Pick | null) {
   await Promise.all([update($, pick, () => next), $.store.set('pick', next)])
   // A change Auto made is shown as "Low → High" for a moment, so the switch is seen.
   if (next && next.by !== 'manual' && before && before.model !== 'haiku' && before.effort !== next.effort) {
-    const change = { from: before.effort, to: next.effort }
+    const change = { from: before.effort, to: next.effort, fromAuto: isAutoPick(before), toAuto: isAutoPick(next) }
     await update($, switched, () => change)
     $.clock.after(SWITCHED_MS, () => void update($, switched, () => null))
   }
@@ -2257,13 +2257,25 @@ async function snap($: EngineInterface) {
 
 /** What the band shows: Auto's pick as it goes out on the chat's model, held to that model's Max (Fable's own on Fable).
  * The pick itself keeps the judged level, so a later model or setting gets it back; each request is held as it goes. */
-export function heldToModel(current: Pick | null, switchedNow: { from: Effort; to: Effort } | null, modelNow: ModelKey | null, cfg: { floor: Effort; ceiling: Effort; fableCeiling: Effort | 'same' } = config) {
+export function heldToModel(current: Pick | null, switchedNow: { from: Effort; to: Effort; fromAuto?: boolean; toAuto?: boolean } | null, modelNow: ModelKey | null, cfg: { floor: Effort; ceiling: Effort; fableCeiling: Effort | 'same' } = config) {
   const id = MODELS.find(m => m.key === (modelNow ?? current?.model))?.id
-  if (!current || !id || current.by === 'manual' || current.by === 'named') return { current, switchedNow }
-  const effort = modelCapped(current.effort, id, cfg)
-  const shown = effort === current.effort ? current : { ...current, effort, why: 'your settings' }
-  const moved = switchedNow && { from: modelCapped(switchedNow.from, id, cfg), to: modelCapped(switchedNow.to, id, cfg) }
+  if (!id) return { current, switchedNow }
+  // Each end as it went out: Auto's held to the model's Max, yours (or a level you named) as it is.
+  const out = (effort: Effort, auto: boolean) => (auto ? modelCapped(effort, id, cfg) : effort)
+  const effort = current && out(current.effort, isAutoPick(current))
+  const shown = !current || effort === current.effort ? current : { ...current, effort: effort!, why: 'your settings' }
+  const moved = switchedNow && { from: out(switchedNow.from, switchedNow.fromAuto ?? true), to: out(switchedNow.to, switchedNow.toAuto ?? true) }
   return { current: shown, switchedNow: moved && moved.from !== moved.to ? moved : null }
+}
+
+/** Auto's pick, as against yours or a level you named: only Auto's is held to a model's Max. */
+export function isAutoPick(p: Pick): boolean {
+  return p.by !== 'manual' && p.by !== 'named'
+}
+
+/** The effort a pick runs at on this model: Auto's held to the model's range, yours (or a named level) as it is. */
+export function goesOut(p: Pick, modelId: string, cfg: { floor: Effort; ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
+  return isAutoPick(p) ? modelCapped(p.effort, modelId, cfg) : p.effort
 }
 type Snap = Awaited<ReturnType<typeof snap>>
 
@@ -4131,10 +4143,12 @@ Saved to ${out}.md and .json` }
     // A message with an image is never a bare follow-up: "fix this" plus a screenshot is new work.
     // Typed while a turn ran (e.turnId), it often steers that task: the judge is told, so it can keep the effort.
     const midTurn = e.turnId !== undefined && before !== null
+    // The model the running turn's requests go to (a routed one while Auto routes): efforts compare as they go out there.
+    const runsOn = (wantsEffort && routed && MODELS.find(m => m.key === routed)?.id) || modelId
     const said = skill ? `${e.text}
 
 [This is a slash command that runs a skill: ${skill.description || skill.name}. Judge the work the skill will do.]` : e.text
-    const shown = midTurn ? withMidTurn(withAttachments(said, e.attachments), before.effort) : withAttachments(said, e.attachments)
+    const shown = midTurn ? withMidTurn(withAttachments(said, e.attachments), goesOut(before, runsOn)) : withAttachments(said, e.attachments)
     if (wantsEffort && before && before.by !== 'manual' && !e.attachments?.length && !slash && isFollowUp(e.text) && keepsEffort(e.text, await recentContext($).catch(() => ''))) {
       await countPrompt($, before.effort, undefined, 0, 0)
       void proof($, `follow-up "${e.text.trim()}": keeping ${before.effort}`)
@@ -4146,7 +4160,7 @@ Saved to ${out}.md and .json` }
       const inUse = await sessionModel($)
       const applied: Pick = { model: inUse, effort: named, why: 'you asked for it', by: 'named' }
       const running = await read($, pick)
-      if (midTurn && running && EFFORTS.indexOf(named) < EFFORTS.indexOf(running.effort)) heldPick = applied
+      if (midTurn && running && EFFORTS.indexOf(named) < EFFORTS.indexOf(goesOut(running, runsOn))) heldPick = applied
       else {
         heldPick = null
         await choose($, applied)
@@ -4189,16 +4203,18 @@ Saved to ${out}.md and .json` }
         // reloads the context, so with Auto on for model it is only suggested.
         if (wantsEffort) {
           const saving = (await read($, saveUntil)) !== null
-          const leaned = bounded(tipped(verdict.effort, verdict.sure, config.bias), config.floor, ceilingFor(inUse))
+          // Within Min and the loosest Max: the pick keeps the judged level, and each request (and the band) holds it to the
+          // Max of the model it runs on, so a request routed or handed to a model with a higher Max still gets it.
+          const leaned = bounded(tipped(verdict.effort, verdict.sure, config.bias), config.floor, loosestCeiling())
           const effort = capped(leaned, saving)
           const why = effort !== leaned ? 'save mode' : leaned !== verdict.effort ? 'your settings' : verdict.why
           const applied: Pick = { ...verdict, model: inUse, effort, why }
           // Mid-turn, a lower verdict would cut the running task's effort for its remaining steps: it waits for the
           // turn to end (the queued message may run as a turn of its own). A higher one helps the task, so it applies.
           const running = await read($, pick)
-          if (midTurn && running && EFFORTS.indexOf(effort) < EFFORTS.indexOf(running.effort)) {
+          if (midTurn && running && EFFORTS.indexOf(goesOut(applied, runsOn)) < EFFORTS.indexOf(goesOut(running, runsOn))) {
             heldPick = applied
-            void proof($, `typed mid-turn: ${effort} waits, the running turn keeps ${running.effort}`)
+            void proof($, `typed mid-turn: ${effort} waits, the running turn keeps ${goesOut(running, runsOn)}`)
           } else {
             heldPick = null
             await choose($, applied)
