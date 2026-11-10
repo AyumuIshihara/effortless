@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.72.1",
+    "date": "2026-11-10",
+    "note": "Fable 5.2: Auto picks the effort there too",
+    "detail": [
+      "Fable 5.2 keeps the prompt cache when the effort changes, so Auto no longer pauses on it. Fable 5.1 and older models still pause.",
+      "Updates come from the AyumuIshihara/effortless fork."
+    ],
+    "public": true
+  },
+  {
     "version": "1.72.0",
     "date": "2026-10-23",
     "note": "The cold-chat band fits the app's new frame, and waits for 400k tokens",

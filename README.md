@@ -50,29 +50,40 @@ The cheaper model is switched on in Settings → Model; compaction is switched i
 
 ## Install
 
-Two ways. Both take a minute and need no terminal.
+This is the AyumuIshihara/effortless fork, installed as `effortless@effortless-ayumu`. If the upstream build
+(`effortless@effortless`) is installed, remove it first, so the two do not both run. Settings made in the upstream build
+are kept under `effortless@effortless` and do not carry over: copy them in `/plugin` → effortless → Configure. The
+upstream marketplace can then go too, with `claude plugin marketplace remove effortless`.
 
 **1. Ask Claude** (easiest). Paste this into Claude Code and press Enter:
 
 ```text
-Install the effortless plugin for me: run `claude plugin marketplace add HeyCubit/effortless` and then `claude plugin install effortless@effortless`. When both succeed, tell me to run /reload-plugins.
+Install the effortless plugin for me: run `claude plugin list`; if `effortless@effortless` is there, run `claude plugin uninstall effortless@effortless` with the --scope it shows, and stop if that fails. Then run `claude plugin marketplace add AyumuIshihara/effortless` and `claude plugin install effortless@effortless-ayumu`. When they succeed, tell me to run /reload-plugins.
 ```
 
-**2. Commands.** Type these two lines in Claude Code's chat box:
+**2. Commands.** Type these lines in Claude Code's chat box, the first only if the upstream build is installed:
 
 ```text
-/plugin marketplace add HeyCubit/effortless
+/plugin uninstall effortless@effortless
 ```
 
 ```text
-/plugin install effortless@effortless
+/plugin marketplace add AyumuIshihara/effortless
 ```
 
-Or in a terminal, in one line:
+```text
+/plugin install effortless@effortless-ayumu
+```
+
+Or in a terminal. `claude plugin list` shows whether the upstream build is installed, and in which scope; add
+`--scope project` or `--scope local` to the uninstall when it is not in the user scope:
 
 ```bash
-claude plugin marketplace add HeyCubit/effortless; claude plugin install effortless@effortless
+claude plugin uninstall effortless@effortless && claude plugin marketplace add AyumuIshihara/effortless && claude plugin install effortless@effortless-ayumu
 ```
+
+Loaded from a folder instead (`--plugin-dir`), the mod still takes itself for `effortless@effortless-ayumu`: Update and
+Uninstall in its settings then act on that installed copy, not on the folder.
 
 Then run `/reload-plugins` (or restart Claude Code). A short setup opens above the prompt: keep **Haiku** alone (one click,
 no key, runs on your own Claude login) or add **Jev** (a TypeSafe key, about 4x faster effort calls), lean cheaper or
@@ -123,7 +134,7 @@ limit passes 80% (with a Save mode that caps effort at Medium), and when your ju
 
 Haiku 5.5 runs on your own Claude login and needs no key. It always makes the handoff call: from 30% of context, every second message, it reads what the chat was for, the trail of topics, the last reply and how full the context is, and says a fresh chat would suit only for a clear reason. Then the Compact button turns into a lit Handoff with the reason. Want Handoff on the bar all the time? Settings → Handoff → Handoff button → **Always**.
 
-Haiku also picks the effort, unless you add Jev, TypeSafe's faster judge (about 0.25 s against about 1 s). With a key, Jev answers the effort first and Haiku steps in whenever Jev is unsure. Run `/plugin configure effortless@effortless` in Claude Code, or use the setup guide or the Judge card in Settings.
+Haiku also picks the effort, unless you add Jev, TypeSafe's faster judge (about 0.25 s against about 1 s). With a key, Jev answers the effort first and Haiku steps in whenever Jev is unsure. Run `/plugin configure effortless@effortless-ayumu` in Claude Code, or use the setup guide or the Judge card in Settings.
 
 | Setting | What it does |
 |---|---|
@@ -198,7 +209,17 @@ What this does and does not show:
 
 ## Models
 
-Effort only changes on Opus 5.5 and Sonnet 5.5. On Fable 5.1 and older models a change of effort between requests rewrote most of the prompt cache, which costs more than it saves, so Auto pauses there and the footer says `Paused`. Haiku takes no effort setting.
+Effort only changes on Opus 5.5, Sonnet 5.5 and Fable 5.2. On other models Auto pauses and the footer says `Paused`: on older models a change of effort between requests rewrote most of the prompt cache, which costs more than it saves. Haiku takes no effort setting.
+
+Fable 5.2 was added in this fork. Claude Code's [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) say a change of effort keeps the cache on Fable 5.1 and later, and a measurement on Claude Code 2.1.321 (2026-11-10) read the same cache after low → high and high → low as with an unchanged effort. Fable 5.1 keeps it only from Claude Code 2.1.260, and effortless does not read Claude Code's version, so Auto still pauses there. The docs also say that on Amazon Bedrock, Google Cloud's Agent Platform, a Claude apps gateway, with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` set or in a HIPAA organisation, a change of effort rewrites the cache on every model; effortless does not detect these, as before for Opus and Sonnet.
+
+## Publishing this fork
+
+Do not run `tools/publish.sh`, `tools/release.sh` or `tools/site.sh`: they move upstream's `stable`, build upstream's site
+and write a fixed commit trailer. To publish a version here, raise `version` in `.claude-plugin/plugin.json`, add the
+same version on top of `public.json` and `releases.json` (`tools/test.sh` stops when the three disagree), commit and push `main`.
+The update card reads `public.json` on `main`, and `claude plugin update` installs only when `plugin.json`'s version
+has changed.
 
 ## Split view
 

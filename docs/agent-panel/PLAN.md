@@ -57,7 +57,7 @@ Order:
    question: type, description, the first 2000 characters of the prompt, and the parent's pick. Same JSON reply:
    `{ model, effort, why, sure }`. Then `tipped`, `bounded`, `capped` as for the main chat.
 5. Judge fails or takes more than 3 s: use the prior, else the parent's pair.
-6. Effort is only sent on Opus 5.5 and Sonnet 5.5 (`cacheSafe`); Haiku takes none.
+6. Effort is only sent on Opus 5.5, Sonnet 5.5 and Fable 5.2 (`cacheSafe`); Haiku takes none.
 
 Applying it:
 - Model: return `next({ ...e, model })` from `agent.spawn` (d.ts:3967-3974). Verified in the types; whether it beats a

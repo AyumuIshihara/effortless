@@ -1,10 +1,10 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "effortless",
+  "name": "effortless-ayumu",
   "description": "Mods for Claude Code: automatic reasoning effort and a cache countdown (effortless), and one pixel-art card while Claude works (textless).",
   "owner": {
-    "name": "HeyCubit",
-    "url": "https://github.com/HeyCubit"
+    "name": "AyumuIshihara",
+    "url": "https://github.com/AyumuIshihara"
   },
   "plugins": [
     {
@@ -12,8 +12,8 @@
       "description": "Sets the reasoning effort for every prompt automatically and shows a prompt-cache countdown with one-click Compact.",
       "source": {
         "source": "url",
-        "url": "https://github.com/HeyCubit/effortless.git",
-        "ref": "stable"
+        "url": "https://github.com/AyumuIshihara/effortless.git",
+        "ref": "main"
       },
       "category": "productivity"
     },

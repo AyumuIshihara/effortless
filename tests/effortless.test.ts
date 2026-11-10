@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -662,10 +662,15 @@ describe('footer text', () => {
 })
 
 describe('helpers', () => {
-  test('cacheSafe: effort may change on Opus 5.5 and Sonnet 5.5 only', () => {
+  test('cacheSafe: effort may change on Opus 5.5, Sonnet 5.5 and Fable 5.2 only', () => {
     expect(cacheSafe('claude-opus-5-5')).toBe(true)
     expect(cacheSafe('claude-sonnet-5-5[1m]')).toBe(true)
+    expect(cacheSafe('claude-fable-5-2')).toBe(true)
+    expect(cacheSafe('claude-fable-5-2[1m]')).toBe(true)
     expect(cacheSafe('claude-fable-5-1')).toBe(false)
+    expect(cacheSafe('claude-fable-5')).toBe(false)
+    expect(cacheSafe('claude-fable-5-20260101')).toBe(false)
+    expect(cacheSafe('claude-fable-5-2-20261101')).toBe(true)
     expect(cacheSafe('claude-opus-4-8')).toBe(false)
     expect(cacheSafe('claude-opus-5')).toBe(false)
   })
@@ -934,7 +939,7 @@ describe('cache countdown', () => {
 })
 
 describe('cache guard', () => {
-  test('on Fable Auto neither judges nor changes the effort, and the footer says Paused', async ($, on) => {
+  test('on Fable 5.1 Auto neither judges nor changes the effort, and the footer says Paused', async ($, on) => {
     engine(on, {}, 'claude-fable-5-1')
     const asked = judgeSays(on, '{"model":"opus","effort":"low","why":"x"}')
     const sent: unknown[] = []
@@ -954,7 +959,27 @@ describe('cache guard', () => {
     await footer.unmount()
   })
 
-  test('a pick made on Opus 5.5 is not applied to a Fable request', async ($, on) => {
+  test('on Fable 5.2 Auto judges and changes the effort, and the footer does not say Paused', async ($, on) => {
+    engine(on, {}, 'claude-fable-5-2')
+    const asked = judgeSays(on, '{"model":"fable","effort":"low","why":"x"}')
+    const sent: unknown[] = []
+    on('turn.step', async function* (_$, e) {
+      sent.push(e.effort)
+      return { turnId: e.turnId, index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+    })
+    const footer = await $.ui.mount(FOOTER)
+    await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
+    const stream = $.turn.step({ turnId: 't1', index: 0, model: 'claude-fable-5-2', effort: 'xhigh', messageCount: 1 })
+    for await (const _ of stream) {
+      // drain
+    }
+    expect(asked.length).toBeGreaterThan(0)
+    expect(sent).toEqual(['low'])
+    expect(await drawn(footer)).not.toContain(' Paused ')
+    await footer.unmount()
+  })
+
+  test('a pick made on Opus 5.5 is not applied to a Fable 5.1 request', async ($, on) => {
     engine(on)
     judgeSays(on, '{"model":"opus","effort":"low","why":"x"}')
     const sent: unknown[] = []
@@ -1389,7 +1414,7 @@ describe('setup guide', () => {
     await band.press({ key: 'setup-next' })
 
     // The last word: the footer's buttons and Fable; no step of ticks. Back goes to the look step.
-    expect(await drawn(band)).toContain('Auto pauses on Fable')
+    expect(await drawn(band)).toContain('Auto pauses on Fable 5.1.')
     expect(await band.find({ key: 'setup-box-timer' })).toBeUndefined()
     await band.press({ key: 'setup-back' })
     expect(await drawn(band)).toContain('4/4')
@@ -3356,14 +3381,14 @@ describe('a message typed while a turn runs', () => {
 describe('updates', () => {
   const DESK = { options: { layout: 'default' } } as never
   /** A session with `installed` on disk and `latest` on main; records what the mod runs. */
-  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string> }) {
+  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; noRepo?: boolean; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string> }) {
     engine(on, v.env)
     const clock = mock.clock(on)
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
     on('fs.read', (_$, e) => {
       if (String(e.path).replaceAll('\\', '/').endsWith('.claude-plugin/plugin.json')) return { value: JSON.stringify({ version: v.installed }) } as never
-      if (v.installPath && String(e.path).replaceAll('\\', '/').endsWith('installed_plugins.json')) return { value: JSON.stringify({ plugins: { 'effortless@effortless': [{ installPath: v.installPath }] } }) } as never
-      if (String(e.path).replaceAll('\\', '/').endsWith('marketplaces/effortless/public.json')) return { value: JSON.stringify([{ version: v.latest, note: 'Quick and Full as one switch.' }]) } as never
+      if (v.installPath && String(e.path).replaceAll('\\', '/').endsWith('installed_plugins.json')) return { value: JSON.stringify({ plugins: { 'effortless@effortless-ayumu': [{ installPath: v.installPath }] } }) } as never
+      if (String(e.path).replaceAll('\\', '/').endsWith('marketplaces/effortless-ayumu/public.json')) return { value: JSON.stringify([{ version: v.latest, note: 'Quick and Full as one switch.' }]) } as never
       return { value: '' } as never
     })
     on('http.fetch', (_$, e) => {
@@ -3380,6 +3405,8 @@ describe('updates', () => {
       envs.push(e.init?.env)
       // git show answers with public.json as it is on stable, when the test gives one.
       const stdout = e.argv[0] === 'git' && e.argv.includes('show') ? (v.git ?? '') : ''
+      // A release-check folder that is not a repository yet: rev-parse fails, so the mod runs git init and adds origin.
+      if (v.noRepo && e.argv[0] === 'git' && e.argv.includes('rev-parse')) return { value: { exitCode: 128, stdout: '', stderr: 'not a git repository' } } as never
       return { value: v.fails ? { exitCode: 1, stdout: '', stderr: v.fails } : { exitCode: 0, stdout, stderr: '' } } as never
     })
     const commands: string[] = []
@@ -3465,7 +3492,44 @@ describe('updates', () => {
     await again.press({ key: 'settings-check-update' })
     await settle()
     expect((await again.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.2')
-    expect(w.ran.some(r => r.includes('fetch -q --depth 1 --filter=blob:none origin stable'))).toBe(true)
+    expect(w.ran.some(r => r.includes('fetch -q --depth 1 --filter=blob:none origin main'))).toBe(true)
+    // The fork's own folder: the upstream build's folder keeps upstream as its origin.
+    expect(w.ran.some(r => r.includes('effortless-AyumuIshihara-release-check') && r.includes('fetch'))).toBe(true)
+    expect(w.ran.some(r => /data[\/]effortless-release-check/.test(r))).toBe(false)
+  })
+
+  test('a new release-check folder gets the fork as origin and fetches its main', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.1', noRepo: true, git: JSON.stringify([{ version: '1.0.2', note: 'From git.' }]) })
+    await start($)
+    await settle()
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(panel)
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const again = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await again.press({ key: 'settings-check-update' })
+    await settle()
+    const init = w.ran.findIndex(r => r.startsWith('git init') && r.includes('effortless-AyumuIshihara-release-check'))
+    const origin = w.ran.findIndex(r => r.includes('remote add origin https://github.com/AyumuIshihara/effortless.git'))
+    const fetch = w.ran.findIndex(r => r.includes('fetch -q --depth 1 --filter=blob:none origin main'))
+    expect(init).toBeGreaterThanOrEqual(0)
+    expect(origin).toBeGreaterThan(init)
+    expect(fetch).toBeGreaterThan(origin)
+    expect(w.ran.some(r => r.includes('HeyCubit'))).toBe(false)
+  })
+
+  test('marketplaceFromRoot reads the marketplace off the cache path, with either slash', () => {
+    expect(marketplaceFromRoot('C:\\Users\\a\\.claude\\plugins\\cache\\effortless-ayumu\\effortless\\1.72.1')).toBe('effortless-ayumu')
+    expect(marketplaceFromRoot('/home/a/.claude/plugins/cache/effortless-ayumu/effortless/1.72.1')).toBe('effortless-ayumu')
+    expect(marketplaceFromRoot('/home/a/.claude/plugins/cache/effortless/effortless/1.72.0')).toBe('effortless')
+    expect(marketplaceFromRoot('C:\\Users\\a\\.claude\\plugins\\cache\\effortless-dev\\effortless\\1.72.0\\')).toBe('effortless-dev')
+    // Loaded from a folder (--plugin-dir): this fork's marketplace, never upstream's.
+    expect(marketplaceFromRoot('C:/work/effortless')).toBe('effortless-ayumu')
+    // A folder that only looks like a cache: a "cache" word inside a name, or not the plugin's own version folder.
+    expect(marketplaceFromRoot('C:/work/mycache/project/effortless/1.0.0')).toBe('effortless-ayumu')
+    expect(marketplaceFromRoot('/work/cache/project/effortless')).toBe('effortless-ayumu')
+    expect(marketplaceFromRoot('/home/a/.claude/plugins/cache/effortless/textless/1.0.0')).toBe('effortless-ayumu')
+    expect(marketplaceFromRoot('/home/a/.claude/plugins/cache/effortless/effortless/1.72.0/hooks')).toBe('effortless-ayumu')
   })
 
   test('Check for updates looks again while an earlier Updated card is still up', DESK, async ($, on) => {
@@ -3576,7 +3640,7 @@ describe('updates', () => {
     w.ran.length = 0
     await ui.press({ key: 'update-go' })
     await settle()
-    expect(w.ran).toEqual(['claude plugin marketplace update effortless', 'claude plugin update effortless@effortless'])
+    expect(w.ran).toEqual(['claude plugin marketplace update effortless-ayumu', 'claude plugin update effortless@effortless-ayumu'])
     expect(w.commands).toContain('/reload-plugins')
     // Forced: a plain reload holds the new version back to keep the cache, and the old code would go on running.
     expect(w.commandArgs).toContain('/reload-plugins --force')
@@ -3587,12 +3651,12 @@ describe('updates', () => {
     await settle()
     const text = await drawn(ui)
     expect(text).toContain('Updated to 1.0.1')
-    expect(text).toContain('/whats-new/')
+    expect(text).toContain('github.com/AyumuIshihara/effortless/blob/main/public.json')
     expect(text).toContain('Star on GitHub')
     await ui.press({ key: 'update-share-go' })
     await settle()
     expect(w.copied).toEqual(['https://heycubit.github.io/effortless/'])
-    expect(text).toContain('github.com/HeyCubit/effortless')
+    expect(text).toContain('github.com/AyumuIshihara/effortless')
     await ui.unmount()
   })
 
@@ -3625,7 +3689,7 @@ describe('updates', () => {
     expect(await drawn(ui)).toContain('Press again to uninstall')
     await ui.press({ key: 'settings-uninstall' })
     await settle()
-    expect(w.ran).toEqual(['claude plugin uninstall effortless@effortless'])
+    expect(w.ran).toEqual(['claude plugin uninstall effortless@effortless-ayumu'])
     expect(w.commands).toContain('/reload-plugins')
     await ui.unmount()
   })
@@ -3678,7 +3742,7 @@ describe('updates', () => {
     await pastSetup(ui)
     await ui.press({ key: 'update-go' })
     await settle()
-    expect(w.ran.filter(r => r.includes('plugin update effortless@'))).toEqual(['C:/Users/friend/.local/bin/claude.exe plugin update effortless@effortless'])
+    expect(w.ran.filter(r => r.includes('plugin update effortless@'))).toEqual(['C:/Users/friend/.local/bin/claude.exe plugin update effortless@effortless-ayumu'])
     expect(await drawn(ui)).toContain('Updated to 1.0.1')
     await ui.unmount()
   })
@@ -3711,8 +3775,8 @@ describe('updates', () => {
     await ui.press({ key: 'update-go' })
     await settle()
     const steps = w.ran.map((r, i) => [r, w.envs[i]] as const).filter(([r]) => r.startsWith('claude plugin'))
-    expect(steps.slice(-2).map(([r]) => r)).toEqual(['claude plugin marketplace update effortless', 'claude plugin update effortless@effortless'])
-    for (const [, env] of steps) expect(env).toMatchObject({ GIT_CONFIG_KEY_0: 'url.https://github.com/HeyCubit/.insteadOf', GIT_CONFIG_VALUE_0: 'git@github.com:HeyCubit/' })
+    expect(steps.slice(-2).map(([r]) => r)).toEqual(['claude plugin marketplace update effortless-ayumu', 'claude plugin update effortless@effortless-ayumu'])
+    for (const [, env] of steps) expect(env).toMatchObject({ GIT_CONFIG_KEY_0: 'url.https://github.com/AyumuIshihara/.insteadOf', GIT_CONFIG_VALUE_0: 'git@github.com:AyumuIshihara/' })
     await ui.unmount()
   })
 

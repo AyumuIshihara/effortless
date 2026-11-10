@@ -13,16 +13,19 @@ export const MODELS: { key: ModelKey; label: string; long: string; id: string }[
   { key: 'haiku', label: 'Haiku', long: 'Haiku 5.5', id: 'claude-haiku-5-5' },
   { key: 'sonnet', label: 'Sonnet', long: 'Sonnet 5.5', id: 'claude-sonnet-5-5' },
   { key: 'opus', label: 'Opus', long: 'Opus 5.5', id: 'claude-opus-5-5' },
-  { key: 'fable', label: 'Fable', long: 'Fable 5.1', id: 'claude-fable-5-1' },
+  { key: 'fable', label: 'Fable', long: 'Fable 5.2', id: 'claude-fable-5-2' },
 ]
 export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // What one token costs relative to an uncached input token, the same ratios on every Claude model. Measured over
 // 80k requests of real Claude Code use, cache reads are about 76% of a session's cost, cache writes 16% and output 8%: effort
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
-// Changing effort between two requests keeps the prompt cache on these models only. On Fable 5.1 and older Opus
-// the next request rewrote 56-100% of the cache (measured), which costs more than any effort can save.
-export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5/.test(modelId)
+// Changing effort between two requests keeps the prompt cache on these models only. On older Opus, and on Fable 5.1
+// before Claude Code 2.1.260, the next request rewrote 56-100% of the cache (measured), which costs more than any
+// effort can save; the mod does not read Claude Code's version, so Fable 5.1 pauses. Fable 5.2 keeps it (Claude Code's
+// prompt-caching docs; measured 2026-11-10 on 2.1.321: low -> high and high -> low read the same cache as an unchanged
+// effort). Listed by version, so a model not checked yet pauses.
+export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5|fable-5-2(?!\d)/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -2228,7 +2231,7 @@ function hoverTips(v: Snap): { effort: string; cache: string } {
   const effortTip = !v.auto
     ? 'Auto is off: the effort stays as you set it. The power button turns Auto on.'
     : v.pausedNow
-      ? 'Auto waits on this model: an effort change would rewrite its prompt cache.'
+      ? 'Auto waits on this model: an effort change may rewrite its prompt cache.'
       : !effortOf(v, v.modelNow ?? 'sonnet')
         ? 'This model runs without an effort level, so Auto has nothing to set.'
       : [
@@ -2509,7 +2512,12 @@ function binSvg(color: string): string {
 }
 const GITHUB_MARK = 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'
 const GITHUB_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#ffffff" d="${GITHUB_MARK}"/></svg>`
-const REPO_URL = 'https://github.com/HeyCubit/effortless'
+// This fork's repository and the branch its marketplace installs from: updates are looked for here, not upstream.
+const REPO_OWNER = 'AyumuIshihara'
+const REPO_URL = `https://github.com/${REPO_OWNER}/effortless`
+const RELEASE_BRANCH = 'main'
+// This fork's marketplace: the install's id is effortless@effortless-ayumu. Used when the path does not name one.
+const MARKETPLACE = 'effortless-ayumu'
 // GitHub's own dark ground, and the width of the panel that carries the star link on the Updated card.
 const GITHUB_BLACK = '#000000'
 const STAR_PANEL = 32
@@ -2613,10 +2621,11 @@ function handoffCardTree($: EngineInterface, e: RenderInput<'AssistantMessage'> 
 }
 
 /** Where the mod learns of a new version: the newest entry of public.json on main, written only by tools/publish.sh.
- * Releases between publishes (releases.json) reach the dev channel, never this card. */
+ * Releases between publishes (releases.json) reach the dev channel, never this card. In this fork public.json is
+ * written by hand (README, Publishing this fork). */
 // The API, not raw.githubusercontent.com: the raw file sits behind a cache that lagged two releases behind.
-const RELEASES_URL = 'https://api.github.com/repos/HeyCubit/effortless/contents/public.json?ref=main'
-const WHATS_NEW_URL = 'https://heycubit.github.io/effortless/whats-new/'
+const RELEASES_URL = `https://api.github.com/repos/${REPO_OWNER}/effortless/contents/public.json?ref=${RELEASE_BRANCH}`
+const WHATS_NEW_URL = `${REPO_URL}/blob/${RELEASE_BRANCH}/public.json`
 /** The site, the link Share copies for a friend. */
 const SITE_URL = 'https://heycubit.github.io/effortless/'
 /** Where a bug is reported: a page on the site that opens a prefilled GitHub issue. */
@@ -2663,16 +2672,17 @@ async function installedVersion($: EngineInterface): Promise<string | undefined>
 /** Looks for a newer version and offers it, unless ✕ put that version away less than UPDATE_SNOOZE_MS ago. */
 // What the last check found, for /effortless update to say (installed, git, web, marketplace).
 let lastUpdateCheck = 'not checked yet'
-/** public.json as it is on stable, read with git: a depth-1 fetch without file contents into a small repo of its own, then
+/** public.json as it is on RELEASE_BRANCH, read with git: a depth-1 fetch without file contents into a small repo of its own, then
  * the one file. Git has no cache in the way, unlike the host's web fetch, and works on the dev channel too. */
 async function latestFromGit($: EngineInterface): Promise<{ version: string; note: string } | undefined> {
-  const dir = `${$.plugin.root.replace(/[\\/]cache[\\/].*$/, '')}/data/effortless-release-check`
+  // Its own folder: the upstream build's folder has upstream as origin, and git init runs only on a new folder.
+  const dir = `${$.plugin.root.replace(/[\\/]cache[\\/].*$/, '')}/data/effortless-${REPO_OWNER}-release-check`
   const git = (...args: string[]) => $.process.run(['git', '-C', dir, ...args], { timeoutMs: 60_000 })
   if ((await git('rev-parse', '--git-dir').catch(() => null))?.exitCode !== 0) {
     await $.process.run(['git', 'init', '-q', dir], { timeoutMs: 30_000 })
-    await git('remote', 'add', 'origin', 'https://github.com/HeyCubit/effortless.git')
+    await git('remote', 'add', 'origin', `${REPO_URL}.git`)
   }
-  const fetched = await git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', 'stable')
+  const fetched = await git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', RELEASE_BRANCH)
   if (fetched.exitCode !== 0) return undefined
   const shown = await git('show', 'FETCH_HEAD:public.json')
   return shown.exitCode === 0 ? latestRelease(shown.stdout) : undefined
@@ -2685,13 +2695,13 @@ async function latestAvailable($: EngineInterface): Promise<{ latest?: { version
   const res = await $.http.fetch(`${RELEASES_URL}&t=${Date.now()}`, { headers: { accept: 'application/vnd.github.raw', 'user-agent': 'effortless' } }).catch((error: unknown) => ({ ok: false, status: 0, text: String(error) }))
   const fromWeb = res.ok ? latestRelease(res.text) : undefined
   const web = res.ok ? (fromWeb ? `web ${fromWeb.version}` : 'web: unreadable') : `web refused (${res.status || res.text.slice(0, 80)})`
-  const marketplace = `${$.plugin.root.replace(/[\\/]cache[\\/].*$/, '')}/marketplaces/effortless/public.json`
+  const marketplace = `${$.plugin.root.replace(/[\\/]cache[\\/].*$/, '')}/marketplaces/${marketplaceOf($)}/public.json`
   const readLocal = async () => {
     const text = await $.fs.read(marketplace).catch(() => '')
     return latestRelease(typeof text === 'string' ? text : '')
   }
   // Always refreshed: the host's web fetch can answer from its own cache, git does not.
-  await runClaude($, ['plugin', 'marketplace', 'update', 'effortless'], { timeoutMs: 120_000, env: GITHUB_OVER_HTTPS }).catch(() => null)
+  await runClaude($, ['plugin', 'marketplace', 'update', marketplaceOf($)], { timeoutMs: 120_000, env: GITHUB_OVER_HTTPS }).catch(() => null)
   const local = await readLocal()
   const best = fromWeb && (!local || !isNewer(local.version, fromWeb.version)) ? fromWeb : local
   return { latest: best, how: `git failed; ${web}; marketplace ${local?.version ?? 'unreadable'}` }
@@ -2794,7 +2804,7 @@ async function checkUpdateNow($: EngineInterface) {
 }
 // The repo is public, so HTTPS needs no key (only this repo's address is rewritten). Without it, git reaches GitHub
 // over SSH and fails for anyone with no SSH key there ("make sure you have the correct access rights").
-const GITHUB_OVER_HTTPS = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.https://github.com/HeyCubit/.insteadOf', GIT_CONFIG_VALUE_0: 'git@github.com:HeyCubit/' }
+const GITHUB_OVER_HTTPS = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.https://github.com/${REPO_OWNER}/.insteadOf`, GIT_CONFIG_VALUE_0: `git@github.com:${REPO_OWNER}/` }
 /** The line of a failed `claude plugin` run that says what went wrong: git's own `fatal:`/`error:` line, else the
  * CLI's ✘ line, else the last line. The last line alone was often the tail of a wrapped sentence. */
 export function updateFailure(output: string): string {
@@ -2904,7 +2914,7 @@ function updateCardTree($: EngineInterface, e: RenderInput<'AbovePrompt'>, card:
     offer: [`✦ effortless ${card.version} is out`, card.note || 'A new version is ready.'],
     updating: ['✦ Updating…', `Getting ${card.version}. Takes a few seconds.`],
     done: [`✦ Updated to ${card.version}`, card.detail ?? 'Loaded in this chat.'],
-    failed: ['✦ Update failed', card.detail ?? 'Try again, or run claude plugin update effortless@effortless.'],
+    failed: ['✦ Update failed', card.detail ?? `Try again, or run claude plugin update ${pluginId($)}.`],
   }[card.stage]
   const share = async () => {
     const r = await $.ui.copy({ text: SITE_URL, surface: e.surface }).catch(() => ({ isCopied: false as const }))
@@ -3143,7 +3153,11 @@ const AUTO_GLOW_H = 37
 const COLD_GLOW_MS = 4200
 /** This install's id: effortless@effortless for users, effortless@effortless-dev on the dev channel. Read off the
  * cache path (…/plugins/cache/<marketplace>/effortless/<version>). */
-const pluginId = ($: EngineInterface) => `effortless@${$.plugin.root.match(/cache[\\/]([^\\/]+)[\\/]/)?.[1] ?? 'effortless'}`
+const pluginId = ($: EngineInterface) => `effortless@${marketplaceOf($)}`
+/** The marketplace an install came from, read off the same cache path; this fork's when the path is not a cache one. */
+export const marketplaceFromRoot = (root: string) =>
+  root.match(/[\\/]plugins[\\/]cache[\\/]([^\\/]+)[\\/]effortless[\\/][^\\/]+[\\/]?$/)?.[1] ?? MARKETPLACE
+const marketplaceOf = ($: EngineInterface) => marketplaceFromRoot($.plugin.root)
 
 /** The rim in the brand's violet while the judge decides: it lights up and stays at full while it thinks, then fades from
  * full once the verdict is in. Two images, each placed by the clock on every draw (inPhase): the app swaps the whole
@@ -4304,7 +4318,7 @@ Saved to ${out}.md and .json` }
         {/* Hovering the level puts a box behind it, like the app's own effort pill. The spaces are its padding:
             Text has no padding of its own. */}
         {v.auto && v.pausedNow ? (
-          // Fable and older models: an effort change rewrites the cache there, so Auto waits.
+          // Models not listed in cacheSafe (Fable 5.1 and older): Auto waits, as an effort change may rewrite the cache.
           <Text dimColor hover={{ scope: 'effort', backgroundColor: HOVER_BOX }}>
             {' Paused '}
           </Text>
@@ -5158,7 +5172,7 @@ Saved to ${out}.md and .json` }
           ...nav(nextButton),
         ])
       }
-      return band('⏻ Auto on or off. ⚙ all settings. Auto pauses on Fable.', 24, [
+      return band('⏻ Auto on or off. ⚙ all settings. Auto pauses on Fable 5.1.', 24, [
         ...nav(<Button key="setup-done" variant="primary" autoFocus label="Done" onPress={() => finishSetup($)} />),
       ])
     }
