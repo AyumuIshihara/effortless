@@ -4702,7 +4702,8 @@ Saved to ${out}.md and .json` }
           <Box key="settings-title" {...(term ? { flexShrink: 0 } : { position: 'absolute', top: 0, left: 2, height: 2.5 })} flexDirection="row" alignItems="center" gap={1}>
             {term ? <Text color={ACCENT} bold>✦</Text> : null}
             {Svg && !term ? <Svg source={SETTINGS_TITLE} alt="effortless" width={92} height={28} /> : <Text color={DASH_TEXT} bold>effortless</Text>}
-            {ownVersion ? <Text color="#6b6b73">v{ownVersion}</Text> : null}
+            {/* "fork": this build comes from the AyumuIshihara/effortless fork, not upstream. Shown with an unread version too. */}
+            <Text color="#6b6b73">{ownVersion ? `v${ownVersion} fork` : 'fork'}</Text>
             {/* Inside a part: Back to the cards, then the part's name. */}
             {card === null ? (
               <Text dimColor>Settings</Text>

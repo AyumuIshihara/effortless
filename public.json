@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.72.2",
+    "date": "2026-11-10",
+    "note": "The settings header says fork",
+    "detail": [
+      "The settings header shows fork after the version, and fork alone when the version cannot be read."
+    ],
+    "public": true
+  },
+  {
     "version": "1.72.1",
     "date": "2026-11-10",
     "note": "Fable 5.2: Auto picks the effort there too",

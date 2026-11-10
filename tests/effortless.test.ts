@@ -3673,6 +3673,40 @@ describe('updates', () => {
     await ui.unmount()
   })
 
+  test('the settings header names the version and that it is the fork', DESK, async ($, on) => {
+    world(on, { installed: '1.0.1', latest: '1.0.1' })
+    await start($)
+    await settle()
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(ui)
+    await ui.press({ key: 'dash-settings' })
+    expect((await ui.find({ key: 'settings-title' }))?.text).toContain('v1.0.1 fork')
+    await ui.unmount()
+  })
+
+  test('in the terminal the settings header says fork too', async ($, on) => {
+    world(on, { installed: '1.0.1', latest: '1.0.1' })
+    await start($)
+    await settle()
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    expect((await ui.find({ key: 'settings-title' }))?.text).toContain('v1.0.1 fork')
+    await ui.unmount()
+  })
+
+  test('the settings header still says fork when the version cannot be read', DESK, async ($, on) => {
+    world(on, { installed: '', latest: '1.0.1' })
+    await start($)
+    await settle()
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(ui)
+    await ui.press({ key: 'dash-settings' })
+    const title = (await ui.find({ key: 'settings-title' }))?.text ?? ''
+    expect(title).toContain('fork')
+    expect(title).not.toContain('v1.0.1')
+    await ui.unmount()
+  })
+
   test('Uninstall in Customize asks for a second press, then uninstalls and reloads', DESK, async ($, on) => {
     const w = world(on, { installed: '1.0.1', latest: '1.0.1' })
     on('ui.toast', () => ({ value: undefined }) as never)
