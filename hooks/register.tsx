@@ -406,9 +406,9 @@ async function recentContext($: EngineInterface): Promise<string> {
 
 /** The context text from the conversation so far: the last user message, short, and the assistant's last reply's end. */
 export function contextFrom(messages: readonly { role: string; text: string }[]): string {
-  const lastUser = [...messages].reverse().find(m => m.role === 'user')
+  const lastUser = [...messages].reverse().find(m => m.role === 'user' && userText(m.text))
   const lastAssistant = lastAssistantText(messages)
-  return [lastUser ? `user: ${lastUser.text.slice(0, 400)}` : '', lastAssistant ? `assistant: ${lastAssistant.slice(-2000)}` : '']
+  return [lastUser ? `user: ${userText(lastUser.text).slice(0, 400)}` : '', lastAssistant ? `assistant: ${lastAssistant.slice(-2000)}` : '']
     .filter(Boolean)
     .join('\n')
 }
@@ -487,6 +487,13 @@ export function isFollowUp(text: string): boolean {
 export function endsOnQuestion(context: string): boolean {
   const reply = context.split('\nassistant: ').pop() ?? ''
   return context.includes('assistant: ') && reply.slice(-400).includes('?')
+}
+
+/** The person's own words: the <system-reminder> blocks the desktop app puts in front of the message taken out. */
+export function userText(text: string): string {
+  // Only the blocks at the head: one the person pasted further on (a log, a prompt to review) is their words.
+  // A block holds no second start tag: one left open does not reach on to a later block's end and take what lies between.
+  return text.replace(/^(?:\s*<system-reminder>(?:(?!<system-reminder>)[\s\S])*?<\/system-reminder>)+/, '').trim()
 }
 
 /** The message as the judge reads it: images and files it carries are named, since the judge sees only text. */
@@ -829,9 +836,9 @@ Reply with JSON only: {"handoff":"reason of at most 8 words, in the person's lan
 
 /** What the handoff check reads: the chat's purpose, a trail of the person's messages, the last reply's end. */
 export function handoffEvidence(messages: readonly { role: string; text: string }[], next: string, percent: number, cold: boolean): string {
-  const asked = messages.filter(m => m.role === 'user' && m.text.trim())
-  const first = asked[0]?.text.slice(0, 500) ?? ''
-  const trail = asked.slice(-8, -1).map(m => `- ${m.text.slice(0, 160).replace(/\s+/g, ' ')}`)
+  const asked = messages.filter(m => m.role === 'user').map(m => userText(m.text)).filter(Boolean)
+  const first = asked[0]?.slice(0, 500) ?? ''
+  const trail = asked.slice(-8, -1).map(t => `- ${t.slice(0, 160).replace(/\s+/g, ' ')}`)
   const reply = lastAssistantText(messages).slice(-700)
   return [
     first ? `What the chat was for (first message):\n${first}` : '',
@@ -4405,16 +4412,21 @@ Saved to ${out}.md and .json` }
     // A landed handoff's card goes once the next message is sent.
     const card = await read($, handoffCard)
     if (card && (card.kind === 'done' || card.kind === 'copied')) await update($, handoffCard, () => null)
+    // The desktop app puts <system-reminder> blocks in front of what the person typed: every check below reads their words
+    // only. next(e) still sends the whole message, reminders and all.
+    const text = userText(e.text)
     const byPerson = e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk'
     // The handoff check runs for every message the person types, whatever the effort judge is doing (or whether Auto is on).
-    if (byPerson && !e.text.trim().startsWith('/') && !isFollowUp(e.text)) void checkHandoff($, e.text).catch(() => undefined)
+    if (byPerson && (text || e.attachments?.length) && !text.startsWith('/') && !isFollowUp(text)) void checkHandoff($, text).catch(() => undefined)
     const wantsEffort = await read($, isAuto)
     const wantsModel = await read($, isAutoModel)
     // A typed slash command is judged only when it is a skill or a custom command (what the person added); the app's own
     // (/compact, /clear, /model) and effortless's never are. The judge is told what the command is, since its name alone says little.
-    const slash = e.text.trim().startsWith('/')
-    const skill = slash && byPerson ? await typedSkill($, e.text) : undefined
+    const slash = text.trim().startsWith('/')
+    const skill = slash && byPerson ? await typedSkill($, text) : undefined
     if (!byPerson || (slash && !skill) || (!wantsEffort && !wantsModel)) return next(e)
+    // Only the app's reminders, nothing the person wrote: the effort in force stays rather than the judge guessing.
+    if (!text && !e.attachments?.length) return next(e)
     // On a model where an effort change rewrites the cache, Auto waits instead of judging.
     const modelId = await $.session.model()
     await modelIs($, modelId)
@@ -4426,17 +4438,17 @@ Saved to ${out}.md and .json` }
     const midTurn = e.turnId !== undefined && before !== null
     // The model the running turn's requests go to (a routed one while Auto routes): efforts compare as they go out there.
     const runsOn = (wantsEffort && routed && MODELS.find(m => m.key === routed)?.id) || modelId
-    const said = skill ? `${e.text}
+    const said = skill ? `${text}
 
-[This is a slash command that runs a skill: ${skill.description || skill.name}. Judge the work the skill will do.]` : e.text
+[This is a slash command that runs a skill: ${skill.description || skill.name}. Judge the work the skill will do.]` : text
     const shown = midTurn ? withMidTurn(withAttachments(said, e.attachments), goesOut(before, runsOn)) : withAttachments(said, e.attachments)
-    if (wantsEffort && before && before.by !== 'manual' && !e.attachments?.length && !slash && isFollowUp(e.text) && keepsEffort(e.text, await recentContext($).catch(() => ''))) {
+    if (wantsEffort && before && before.by !== 'manual' && !e.attachments?.length && !slash && isFollowUp(text) && keepsEffort(text, await recentContext($).catch(() => ''))) {
       await countPrompt($, before.effort, undefined, 0, 0)
-      void proof($, `follow-up "${e.text.trim()}": keeping ${before.effort}`)
+      void proof($, `follow-up "${text.trim()}": keeping ${before.effort}`)
       return next(e)
     }
     // "max effort", "effort: low": the person said the level, so it runs, past Min, Max and save mode, and no judge is asked.
-    const named = wantsEffort && !slash ? namedEffort(e.text) : undefined
+    const named = wantsEffort && !slash ? namedEffort(text) : undefined
     if (named) {
       const inUse = await sessionModel($)
       const applied: Pick = { model: inUse, effort: named, why: 'you asked for it', by: 'named' }
@@ -4448,7 +4460,7 @@ Saved to ${out}.md and .json` }
       }
       if (!midTurn && routed) routed = null
       await countPrompt($, inUse !== 'haiku' ? named : undefined, 'named', 0, 0)
-      void proof($, `named level ${named} in "${e.text.slice(0, 50)}": no judge`)
+      void proof($, `named level ${named} in "${text.slice(0, 50)}": no judge`)
       $.ui.invalidate('ui.render')
       return next(e)
     }
@@ -4477,8 +4489,8 @@ Saved to ${out}.md and .json` }
       void proof(
         $,
         verdict
-          ? `judged by ${verdict.by} in ${ms} ms: ${verdict.model}/${verdict.effort} (${verdict.why}) for "${e.text.slice(0, 50)}"`
-          : `no verdict after ${ms} ms for "${e.text.slice(0, 50)}"`,
+          ? `judged by ${verdict.by} in ${ms} ms: ${verdict.model}/${verdict.effort} (${verdict.why}) for "${text.slice(0, 50)}"`
+          : `no verdict after ${ms} ms for "${text.slice(0, 50)}"`,
       )
       $.ui.invalidate('ui.render')
       if (verdict) {
@@ -4508,7 +4520,7 @@ Saved to ${out}.md and .json` }
           let to = wantsEffort && config.modelAuto === 'on' ? routeTo(verdict.model, inUse) : null
           // The last prompt ran on a cheaper model and this one says it was wrong: that is a miss. The retry runs on the
           // chat's own model, and so do the next few prompts.
-          if (routed && looksLikeRedo(e.text)) {
+          if (routed && looksLikeRedo(text)) {
             stayUp = REDO_STAY_PROMPTS
             await update($, saved, old => ({ ...asSpent(old), redone: asSpent(old).redone + 1 }))
             void proof($, `redo after ${routed}: the next ${REDO_STAY_PROMPTS} prompts stay on ${inUse}`)
