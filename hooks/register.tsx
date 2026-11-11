@@ -2866,38 +2866,48 @@ export function latestRelease(text: string): { version: string; note: string } |
 export function updateSnoozed(hidden: { version: string; at: number } | null, version: string, now: number): boolean {
   return !!hidden && hidden.version === version && now - hidden.at < UPDATE_SNOOZE_MS
 }
-async function installedVersion($: EngineInterface): Promise<string | undefined> {
-  const text = await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => '')
+/** The version in plugin.json under `root`, or nothing when it cannot be read or is not `major.minor.patch`. */
+async function versionAt($: EngineInterface, root: string): Promise<string | undefined> {
+  const text = await $.fs.read(`${root}/.claude-plugin/plugin.json`).catch(() => '')
   try {
-    const v = (JSON.parse(typeof text === 'string' ? text : '') as { version?: unknown }).version
-    return typeof v === 'string' ? v : undefined
+    const v = (JSON.parse((typeof text === 'string' ? text : '').replace(/^﻿/, '')) as { version?: unknown }).version
+    return typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v) ? v : undefined
   } catch {
     return undefined
   }
 }
+const installedVersion = ($: EngineInterface) => versionAt($, $.plugin.root)
 /** Looks for a newer version and offers it, unless ✕ put that version away less than UPDATE_SNOOZE_MS ago. */
 // What the last check found, for /effortless update to say (installed, git, web, marketplace).
 let lastUpdateCheck = 'not checked yet'
 /** public.json as it is on RELEASE_BRANCH, read with git: a depth-1 fetch without file contents into a small repo of its own, then
  * the one file. Git has no cache in the way, unlike the host's web fetch, and works on the dev channel too. */
-async function latestFromGit($: EngineInterface): Promise<{ version: string; note: string } | undefined> {
+async function latestFromGit($: EngineInterface): Promise<{ release?: { version: string; note: string }; why: string }> {
   // Its own folder: the upstream build's folder has upstream as origin, and git init runs only on a new folder.
   const dir = `${$.plugin.root.replace(/[\\/]cache[\\/].*$/, '')}/data/effortless-${REPO_OWNER}-release-check`
   const git = (...args: string[]) => $.process.run(['git', '-C', dir, ...args], { timeoutMs: 60_000 })
-  if ((await git('rev-parse', '--git-dir').catch(() => null))?.exitCode !== 0) {
-    await $.process.run(['git', 'init', '-q', dir], { timeoutMs: 30_000 })
-    await git('remote', 'add', 'origin', `${REPO_URL}.git`)
+  // Which step failed and git's own line, for /effortless update to say (the address is the public repo's).
+  const failed = (step: string, r: { exitCode: number; stderr: string; stdout: string }) => ({ why: `git ${step} ${r.exitCode}: ${updateFailure(r.stderr || r.stdout).slice(0, 100)}` })
+  try {
+    if ((await git('rev-parse', '--git-dir').catch(() => null))?.exitCode !== 0) {
+      await $.process.run(['git', 'init', '-q', dir], { timeoutMs: 30_000 })
+      await git('remote', 'add', 'origin', `${REPO_URL}.git`)
+    }
+    const fetched = await git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', RELEASE_BRANCH)
+    if (fetched.exitCode !== 0) return failed('fetch', fetched)
+    const shown = await git('show', 'FETCH_HEAD:public.json')
+    if (shown.exitCode !== 0) return failed('show', shown)
+    const release = latestRelease(shown.stdout)
+    return release ? { release, why: `git ${release.version}` } : { why: 'git: public.json unreadable' }
+  } catch (error) {
+    return { why: `git did not run: ${String(error).slice(0, 100)}` }
   }
-  const fetched = await git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', RELEASE_BRANCH)
-  if (fetched.exitCode !== 0) return undefined
-  const shown = await git('show', 'FETCH_HEAD:public.json')
-  return shown.exitCode === 0 ? latestRelease(shown.stdout) : undefined
 }
 /** The newest public release: from git first; where git is missing or offline, public.json on main over the web and the
  * marketplace's own copy after `claude plugin marketplace update`, whichever is newer. */
-async function latestAvailable($: EngineInterface): Promise<{ latest?: { version: string; note: string }; how: string; via?: 'git' | 'web' | 'marketplace' }> {
-  const fromGit = await latestFromGit($).catch(() => undefined)
-  if (fromGit) return { latest: fromGit, how: `git ${fromGit.version}`, via: 'git' }
+async function latestAvailable($: EngineInterface): Promise<{ latest?: { version: string; note: string }; how: string; via?: 'git' | 'web' | 'marketplace'; fresh: boolean }> {
+  const git = await latestFromGit($)
+  if (git.release) return { latest: git.release, how: git.why, via: 'git', fresh: true }
   const res = await $.http.fetch(`${RELEASES_URL}&t=${Date.now()}`, { headers: { accept: 'application/vnd.github.raw', 'user-agent': 'effortless' } }).catch((error: unknown) => ({ ok: false, status: 0, text: String(error) }))
   const fromWeb = res.ok ? latestRelease(res.text) : undefined
   const web = res.ok ? (fromWeb ? `web ${fromWeb.version}` : 'web: unreadable') : `web refused (${res.status || res.text.slice(0, 80)})`
@@ -2907,10 +2917,13 @@ async function latestAvailable($: EngineInterface): Promise<{ latest?: { version
     return latestRelease(typeof text === 'string' ? text : '')
   }
   // Always refreshed: the host's web fetch can answer from its own cache, git does not.
-  await runClaude($, ['plugin', 'marketplace', 'update', marketplaceOf($)], { timeoutMs: 120_000, env: GITHUB_OVER_HTTPS }).catch(() => null)
+  const refreshed = (await runClaude($, ['plugin', 'marketplace', 'update', marketplaceOf($)], { timeoutMs: 120_000, env: GITHUB_OVER_HTTPS }).catch(() => null))?.exitCode === 0
   const local = await readLocal()
   const best = fromWeb && (!local || !isNewer(local.version, fromWeb.version)) ? fromWeb : local
-  return { latest: best, how: `git failed; ${web}; marketplace ${local?.version ?? 'unreadable'}`, via: best ? (best === fromWeb ? 'web' : 'marketplace') : undefined }
+  const via = best ? (best === fromWeb ? 'web' : 'marketplace') : undefined
+  // A marketplace copy the refresh did not reach may be old: it can show a newer version, never that there is none.
+  const fresh = via === 'web' || (via === 'marketplace' && refreshed)
+  return { latest: best, how: `${git.why}; ${web}; marketplace ${local?.version ?? 'unreadable'}${refreshed ? '' : ' (not refreshed)'}`, via, fresh }
 }
 /** The session's timers. A reload starts the module over, maybe with no session start (the countdown froze on "Cold"),
  * so the band's first draw starts them too. A session start always starts them: a timer started inside a request may
@@ -2977,12 +2990,14 @@ async function afterLoad($: EngineInterface) {
 }
 /** Which way an update check found the version; `none` when it failed before any way was tried. */
 type UpdateVia = 'git' | 'web' | 'marketplace' | 'skipped' | 'none'
-type UpdateOutcome = { via: UpdateVia; ok: boolean }
+/** What a look found: a newer version (offered or put away), that this is the newest, or that it could not tell. */
+type UpdateFound = 'found' | 'newest' | 'unknown'
+type UpdateOutcome = { via: UpdateVia; ok: boolean; found: UpdateFound }
 /** The look for a newer version, timed in the timing log: how long, and which way the version was found. It counts as
  * ok only where a version was found and the look then ran to its end. */
-async function checkUpdate($: EngineInterface) {
+async function checkUpdate($: EngineInterface): Promise<UpdateFound> {
   const startedAt = performance.now()
-  const outcome: UpdateOutcome = { via: 'none', ok: false }
+  const outcome: UpdateOutcome = { via: 'none', ok: false, found: 'unknown' }
   let isDone = false
   try {
     await checkUpdateLook($, outcome)
@@ -2990,6 +3005,7 @@ async function checkUpdate($: EngineInterface) {
   } finally {
     timingAdd(updateLine(new Date().toISOString(), loadedSession, performance.now() - startedAt, outcome.via, outcome.ok && isDone))
   }
+  return outcome.found
 }
 async function checkUpdateLook($: EngineInterface, outcome: UpdateOutcome) {
   const shown = await read($, updateCard)
@@ -2999,22 +3015,27 @@ async function checkUpdateLook($: EngineInterface, outcome: UpdateOutcome) {
     outcome.ok = true
     return
   }
-  const { latest, how, via } = await latestAvailable($)
+  const { latest, how, via, fresh } = await latestAvailable($)
   // No way gave a version: the marketplace copy is the last one tried.
   outcome.via = via ?? 'marketplace'
   outcome.ok = latest !== undefined
   const mine = await installedVersion($)
   lastUpdateCheck = `installed ${mine ?? 'unreadable'}; ${how}`
   if (!latest || !mine || !isNewer(latest.version, mine)) {
-    if (shown) await update($, updateCard, () => null)
+    // Up to date only when both versions were read and the newest came from a source just reached.
+    outcome.found = latest && mine && fresh ? 'newest' : 'unknown'
+    if (outcome.found === 'unknown') outcome.ok = false
+    // Only an offer is taken back: an update started while this look ran keeps its card.
+    if (shown) await update($, updateCard, c => (c && c.stage !== 'offer' ? c : null))
     // A version found earlier is stale once this one is as new (installed some other way): the button looks again.
     await update($, updateCheck, cur => (cur.startsWith('found ') ? 'idle' : cur))
     return
   }
+  outcome.found = 'found'
   const now = await $.clock.now()
   const hidden = (await $.store.get('updateHidden').catch(() => null)) as { version: string; at: number } | null
   if (updateSnoozed(hidden, latest.version, now)) return
-  if (shown?.version !== latest.version) await update($, updateCard, () => ({ stage: 'offer', version: latest.version, note: latest.note, at: now }))
+  if (shown?.version !== latest.version) await update($, updateCard, c => (c && c.stage !== 'offer' ? c : { stage: 'offer', version: latest.version, note: latest.note, at: now }))
 }
 // The Settings header's "Check for updates": idle, checking, up to date, or the version found (then the button installs it).
 const updateCheck = atom({ plugin: 'effortless', key: 'updateCheck' } as const, 'idle')
@@ -3024,11 +3045,16 @@ async function checkUpdateNow($: EngineInterface) {
   await $.store.set('updateHidden', null).catch(() => undefined)
   // An Updated or failed card left from earlier made checkUpdate skip the look and the button said Up to date.
   await update($, updateCard, c => (c && (c.stage === 'done' || c.stage === 'failed') ? null : c))
-  await checkUpdate($).catch((error: unknown) => { lastUpdateCheck = `check failed: ${String(error).slice(0, 120)}` })
+  const found = await checkUpdate($).catch((error: unknown): UpdateFound => {
+    lastUpdateCheck = `check failed: ${String(error).slice(0, 120)}`
+    return 'unknown'
+  })
   const card = await read($, updateCard)
-  await update($, updateCheck, () => (card && card.stage === 'offer' ? `found ${card.version}` : 'newest'))
-  // "Up to date" goes back to the button after a few seconds; a found version stays until it is installed or put away.
-  if (!(card && card.stage === 'offer')) $.clock.after(5000, () => void update($, updateCheck, cur => (cur === 'newest' ? 'idle' : cur)))
+  const said = card && card.stage === 'offer' ? `found ${card.version}` : found === 'newest' ? 'newest' : 'failed'
+  await update($, updateCheck, () => said)
+  // "Up to date" or the failure goes back to the button after a few seconds; a found version stays until it is
+  // installed or put away.
+  if (said === 'newest' || said === 'failed') $.clock.after(said === 'failed' ? 8000 : 5000, () => void update($, updateCheck, cur => (cur === said ? 'idle' : cur)))
 }
 // The repo is public, so HTTPS needs no key (only this repo's address is rewritten). Without it, git reaches GitHub
 // over SSH and fails for anyone with no SSH key there ("make sure you have the correct access rights").
@@ -3075,16 +3101,45 @@ async function runClaude($: EngineInterface, args: string[], opts: Parameters<En
 }
 /** Update pressed: the marketplace and the plugin are updated as `claude plugin` does, then the plugins reloaded so
  * the new version runs in this chat. The new module shows "Updated" (see session.start). */
+/** Whether an update runs in this module: a second press, command or look while one runs starts nothing. */
+let updateRunning = false
 async function runUpdate($: EngineInterface, card: UpdateCard) {
+  if (updateRunning) return
+  updateRunning = true
+  try {
+    await runUpdateOnce($, card)
+  } finally {
+    updateRunning = false
+  }
+}
+async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
   await update($, updateCard, () => ({ ...card, stage: 'updating' }))
   const step = async (args: string[]) => {
     const r = await runClaude($, args, { timeoutMs: 180_000, env: GITHUB_OVER_HTTPS })
     if (r.exitCode !== 0) throw new Error(updateFailure(r.stderr || r.stdout) || `claude ${args.join(' ')} failed`)
   }
+  let installed: string | undefined
   try {
     // This install's own marketplace: effortless for users, effortless-dev on the dev channel.
+    // This chat's install, before the update moves it: the CLI updates one scope (and project), and other scopes keep
+    // their own folders and versions.
+    const own = ownEntryKeys((await installEntries($)) ?? [], $.plugin.root)
     await step(['plugin', 'marketplace', 'update', pluginId($).split('@')[1]])
     await step(['plugin', 'update', pluginId($)])
+    // The CLI also ends with 0 when it installed nothing (already up to date by its own look): only the version now in
+    // the folder of one of this chat's entries says the update happened. Another scope already on it does not count.
+    const after = await installEntries($)
+    const folders = after ? own.map(k => folderOf(after, k)).filter((x): x is string => x !== undefined) : []
+    let got: string | undefined
+    for (const folder of folders) {
+      got = await versionAt($, folder)
+      if (got === card.version) {
+        installed = folder
+        break
+      }
+    }
+    if (!installed)
+      throw new Error(folders.length ? `claude plugin update finished, but ${got ?? 'an unreadable version'} is installed, not ${card.version}.` : `claude plugin update finished, but which install it updated could not be read.`)
   } catch (error) {
     const message = String(error instanceof Error ? error.message : error)
     // No CLI anywhere (a desktop-only install): say what to install, not the engine's ENOENT.
@@ -3094,7 +3149,7 @@ async function runUpdate($: EngineInterface, card: UpdateCard) {
   }
   // The desktop app keeps this chat on the folder it started with, and a reload reads that folder again: so the new
   // version's files go into it, or the reload would bring back the old code.
-  await syncRunningCopy($).catch(() => undefined)
+  await syncRunningCopy($, installed).catch(() => undefined)
   const now = await $.clock.now()
   await $.store.set('updatedTo', { version: card.version, note: card.note, at: now })
   // Installed, not yet running: only the new code, once loaded, says "Loaded in this chat" (afterLoad).
@@ -3116,12 +3171,40 @@ export function syncPlan(running: string, installed: string | undefined): string
     ? ['robocopy', installed, running, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP']
     : ['cp', '-R', `${installed}/.`, running]
 }
+type InstallEntry = { installPath?: unknown; scope?: unknown; projectPath?: unknown }
+/** This plugin's entries in installed_plugins.json (one per scope and project), or nothing when it cannot be read. */
+async function installEntries($: EngineInterface): Promise<InstallEntry[] | undefined> {
+  const home = $.plugin.root.replace(/[\\/]cache[\\/].*$/, '')
+  try {
+    const text = String(await $.fs.read(`${home}/installed_plugins.json`)).replace(/^﻿/, '')
+    const list = (JSON.parse(text) as { plugins?: Record<string, unknown> }).plugins?.[pluginId($)]
+    return Array.isArray(list) ? list.filter((x): x is InstallEntry => !!x && typeof x === 'object') : undefined
+  } catch {
+    return undefined
+  }
+}
+/** Whether two folders are the same, written with either slash, a trailing one or a drive letter in either case. */
+export function sameFolder(a: string, b: string): boolean {
+  const norm = (x: string) => x.replaceAll('\\', '/').replace(/\/+$/, '').replace(/^[A-Za-z]:/, d => d.toLowerCase())
+  return norm(a) === norm(b)
+}
+/** The entries that may be this chat's, by scope and project as keys: those that name the folder this code runs from
+ * (several scopes can share one version's folder, and the CLI picks one by the project it runs in); with one entry
+ * only, that one; otherwise none (a working copy, or no way to tell). */
+export function ownEntryKeys(entries: readonly InstallEntry[], running: string): string[] {
+  const key = (e: InstallEntry) => `${String(e.scope ?? '')}|${String(e.projectPath ?? '')}`
+  const mine = entries.filter(e => typeof e.installPath === 'string' && sameFolder(e.installPath, running))
+  if (mine.length) return mine.map(key)
+  return entries.length === 1 ? [key(entries[0]!)] : []
+}
+/** The folder of the entry with `key` now, or nothing. */
+export function folderOf(entries: readonly InstallEntry[], key: string): string | undefined {
+  const found = entries.filter(e => `${String(e.scope ?? '')}|${String(e.projectPath ?? '')}` === key)
+  return found.length === 1 && typeof found[0]!.installPath === 'string' ? found[0]!.installPath : undefined
+}
 /** Copies the files of the version just installed into the folder this chat runs from, when the two differ. A failed
  * copy leaves the reload as it was. */
-async function syncRunningCopy($: EngineInterface) {
-  const home = $.plugin.root.replace(/[\\/]cache[\\/].*$/, '')
-  const record = JSON.parse(String(await $.fs.read(`${home}/installed_plugins.json`))) as { plugins?: Record<string, { installPath?: unknown }[]> }
-  const installed = record.plugins?.[pluginId($)]?.map(x => x.installPath).filter((x): x is string => typeof x === 'string').at(-1)
+async function syncRunningCopy($: EngineInterface, installed: string | undefined) {
   const argv = syncPlan($.plugin.root, installed)
   if (!argv) return
   const r = await $.process.run(argv, { timeoutMs: 120_000 })
@@ -4183,9 +4266,19 @@ export const register: Register = (on, options) => {
       return { text: `The update card shows its "${stage}" look (a preview). /effortless card off clears it.` }
     }
     if (arg === 'update') {
-      await checkUpdate($).catch(() => undefined)
+      // Asking is a decision to look, past a Later pressed earlier (as Check for updates in Settings).
+      await $.store.set('updateHidden', null).catch(() => undefined)
+      // An Updated or failed card left from earlier would make the look skip itself.
+      await update($, updateCard, c => (c && (c.stage === 'done' || c.stage === 'failed') ? null : c))
+      const found = await checkUpdate($).catch((error: unknown): UpdateFound => {
+        lastUpdateCheck = `check failed: ${String(error).slice(0, 120)}`
+        return 'unknown'
+      })
       const card = await read($, updateCard)
-      if (!card || card.stage === 'done') return { text: `effortless ${(await installedVersion($)) ?? ''} is the newest (${lastUpdateCheck}).` }
+      // An update already on its way is not started a second time.
+      if (updateRunning || card?.stage === 'updating') return { text: `Already updating${card ? ` to ${card.version}` : ''}.` }
+      if (!card || card.stage === 'done')
+        return { text: found === 'newest' ? `effortless ${(await installedVersion($)) ?? ''} is the newest (${lastUpdateCheck}).` : `Could not tell whether a newer effortless is out (${lastUpdateCheck}).` }
       void runUpdate($, card)
       return { text: `Updating to ${card.version}…` }
     }
@@ -5004,6 +5097,8 @@ Saved to ${out}.md and .json` }
               <Text dimColor>Checking…</Text>
             ) : checking === 'newest' ? (
               <Text dimColor>✓ Up to date</Text>
+            ) : checking === 'failed' ? (
+              <Button key="settings-check-update" plain dimColor label="Could not check · Try again" onPress={() => void checkUpdateNow($)} />
             ) : checking.startsWith('found ') && (!ownVersion || isNewer(checking.slice(6), ownVersion)) ? (
               <Button key="settings-update" variant="primary" label={`Update to ${checking.slice(6)}`} onPress={async () => {
                 const card = await read($, updateCard)

@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.72.6",
+    "date": "2026-11-11",
+    "note": "更新の確認と更新の失敗を、成功と表示しないようにする",
+    "detail": [
+      "設定画面の Check for updates で、版を取れなかったときや手元の古い情報しか無いときは、Up to date ではなく Could not check と出す。",
+      "Update の後に入った版を確かめ、案内した版でなければ Update failed と、入っている版を出す。"
+    ],
+    "public": true
+  },
+  {
     "version": "1.72.5",
     "date": "2026-11-10",
     "note": "切り替えの所要時間の記録を足す",
