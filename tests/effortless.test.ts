@@ -726,6 +726,21 @@ describe('follow-ups', () => {
     expect(asked.length).toBe(1)
     expect(sent[0].effort).toBe('high')
   })
+
+  test('through prompt.submit, the reminders at the head are not judged: "go" after them is a follow-up, reminders alone ask no judge', async ($, on) => {
+    engine(on)
+    const asked = judgeSays(on, '{"model":"opus","effort":"high","why":"hard"}')
+    const sent = recordSteps(on)
+    const reminder = '<system-reminder>Plugins reloaded. effort xhigh</system-reminder>'
+    await $.prompt.submit({ text: `${reminder}\ngranska hela relayn`, wait: false, origin: { kind: 'composer' } })
+    await $.prompt.submit({ text: `${reminder}\ngo`, wait: false, origin: { kind: 'composer' } })
+    await $.prompt.submit({ text: reminder, wait: false, origin: { kind: 'composer' } })
+    await step($, 'medium')
+    // One judge, on the person's words; "effort xhigh" inside the reminder is not taken as a named level.
+    expect(asked.length).toBe(1)
+    expect(JSON.stringify(asked[0])).not.toContain('system-reminder')
+    expect(sent[0].effort).toBe('high')
+  })
 })
 
 describe('named level', () => {
@@ -1405,8 +1420,14 @@ describe('context for the judge', () => {
     expect(userText(`${reminder}\n/review`).startsWith('/')).toBe(true)
     expect(userText(reminder)).toBe('')
     expect(userText('plain message')).toBe('plain message')
+    // A block the person pasted after their words stays: only the head's blocks are the app's.
+    expect(userText('review this:\n<system-reminder>a long prompt</system-reminder>')).toBe('review this:\n<system-reminder>a long prompt</system-reminder>')
+    expect(userText(`${reminder}\nreview this:\n<system-reminder>a long prompt</system-reminder>`)).toBe('review this:\n<system-reminder>a long prompt</system-reminder>')
     // A reminder without its end tag is left whole: nothing the person wrote after it is cut.
     expect(userText('<system-reminder>no end tag\nfix the footer')).toBe('<system-reminder>no end tag\nfix the footer')
+    // Nor when a later block closes: what lies between is the person's.
+    const open = '<system-reminder>no end tag\nfix the footer\n<system-reminder>quoted</system-reminder>\ncheck it'
+    expect(userText(open)).toBe(open)
     const context = contextFrom([
       { role: 'user', text: 'build the settings page' },
       { role: 'user', text: reminder },

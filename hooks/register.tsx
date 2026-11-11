@@ -491,7 +491,9 @@ export function endsOnQuestion(context: string): boolean {
 
 /** The person's own words: the <system-reminder> blocks the desktop app puts in front of the message taken out. */
 export function userText(text: string): string {
-  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+  // Only the blocks at the head: one the person pasted further on (a log, a prompt to review) is their words.
+  // A block holds no second start tag: one left open does not reach on to a later block's end and take what lies between.
+  return text.replace(/^(?:\s*<system-reminder>(?:(?!<system-reminder>)[\s\S])*?<\/system-reminder>)+/, '').trim()
 }
 
 /** The message as the judge reads it: images and files it carries are named, since the judge sees only text. */
