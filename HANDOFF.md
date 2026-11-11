@@ -1,5 +1,17 @@
 # effortless handoff
 
+## このフォーク（AyumuIshihara/effortless）の運用
+
+- 配布元は `main`。マーケットプレイス `effortless-ayumu`（`.claude-plugin/marketplace.json`）が `main` を指すので、push すると利用者の更新カードに届く。push は本人の指示があるときだけ行う。
+- 版は `.claude-plugin/plugin.json`・`public.json`・`releases.json` の先頭を手で揃える。`bash tools/test.sh` が食い違いを止める。手順は README の「Publishing this fork」。
+- `tools/publish.sh`・`tools/release.sh`・`tools/site.sh` は上流用なので使わない（上流の `stable` やサイトを動かす）。
+- 上流（`upstream` = HeyCubit/effortless）の取り込みは、`git fetch upstream` の後に main へマージする。未マージの上流 PR は差分を読んで、要る物を手で当て、コミットに元の PR と作者を書く。
+- 不具合・残作業は AyumuIshihara/effortless の Issue で追う。
+- `bash tools/test.sh` は、今の Claude Code では元から 16〜17 件落ちる（太字に `weight` が付くなど、試験の期待値が古い）。直した後に増えていないかを、直す前の版と比べて確かめる。
+- 計測の記録: `~/.claude/effortless-timing-<chat>-<load>-<part>.log`（描画と更新確認の所要）。描画の記録は `effortless-render-<chat>.log`。
+
+以下は上流（HeyCubit/effortless）の 2026-10 時点の引き継ぎで、当時の記録として残す。
+
 ## Branch and PRs
 - `main` on HeyCubit/effortless, direct pushes, no open PRs, no open issues. Several chats push to main: `git pull --rebase --autostash` first.
 - History was rewritten on 2026-10-08 (every commit now authored by HeyCubit). Old clones and worktrees
