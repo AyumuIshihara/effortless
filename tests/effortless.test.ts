@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -92,6 +92,9 @@ const FOOTER = { plugin: 'effortless', surface: 'desktop', component: 'SessionMo
 
 /** The band above the prompt on desktop: it draws nothing (only the terminal has rows there). */
 const DESK_BAND = { plugin: 'effortless', surface: 'desktop', ...BAND } as never
+
+/** For the tests that walk the clock through an hour or more of 15 s ticks: on a busy machine they outlast 5 s. */
+const LONG = { timeoutMs: 20_000 }
 
 /** What a mounted tree draws, as text: its elements, props and strings. */
 /** Nothing shows above the prompt on desktop: only the hidden hover cards, revealed by hovering the footer. */
@@ -807,7 +810,7 @@ describe('cache countdown', () => {
     expect(mostlyCached({ input_tokens: 90000, cache_read_input_tokens: 10 })).toBe(false)
   })
 
-  test('nothing before the first response; then it counts down with no further response, turns amber, goes cold', async ($, on) => {
+  test('nothing before the first response; then it counts down with no further response, turns amber, goes cold', LONG, async ($, on) => {
     engine(on)
     const mocked = mock.clock(on)
     answer(on, { ephemeral_1h_input_tokens: 500, ephemeral_5m_input_tokens: 0 })
@@ -873,7 +876,7 @@ describe('cache countdown', () => {
     return band
   }
 
-  test('Compact appears only once the cache is cold, and a click compacts', async ($, on) => {
+  test('Compact appears only once the cache is cold, and a click compacts', LONG, async ($, on) => {
     engine(on)
     on('session.usage', () => ({ value: { context: { tokens: 500_000, window: 1_000_000, percent: 50 } } }) as never)
     const mocked = mock.clock(on)
@@ -1394,6 +1397,27 @@ describe('context for the judge', () => {
     expect(text).toContain('user: make me a new section')
     expect(text.length).toBeLessThan(2500)
     expect(contextFrom([])).toBe('')
+  })
+
+  test("the desktop app's <system-reminder> blocks are taken out: the judge reads what the person typed", () => {
+    const reminder = '<system-reminder>\nThe user started this session without choosing a folder.\n</system-reminder>'
+    expect(userText(`${reminder}\n<system-reminder>Plugins reloaded.</system-reminder>\nfix the footer`)).toBe('fix the footer')
+    expect(userText(`${reminder}\n/review`).startsWith('/')).toBe(true)
+    expect(userText(reminder)).toBe('')
+    expect(userText('plain message')).toBe('plain message')
+    // A reminder without its end tag is left whole: nothing the person wrote after it is cut.
+    expect(userText('<system-reminder>no end tag\nfix the footer')).toBe('<system-reminder>no end tag\nfix the footer')
+    const context = contextFrom([
+      { role: 'user', text: 'build the settings page' },
+      { role: 'user', text: reminder },
+      { role: 'assistant', text: 'done' },
+    ])
+    expect(context).toContain('user: build the settings page')
+    expect(context).not.toContain('system-reminder')
+    const evidence = handoffEvidence([{ role: 'user', text: `${reminder}\nbuild the settings page` }, { role: 'user', text: reminder }], 'next', 10, false)
+    expect(evidence).toContain('build the settings page')
+    expect(evidence).not.toContain('system-reminder')
+    expect(evidence).toContain('1 messages so far')
   })
 
   test("Haiku is handed the assistant's question and told how to judge an answer to it", async ($, on) => {
@@ -2928,7 +2952,7 @@ describe('dashboard', () => {
     await guide.unmount()
   }
 
-  test('cache-aware routing, live through the hooks: a cold Sonnet is skipped on a big warm Opus chat, Haiku moves, a cold chat moves, and a routed reply leaves the countdown alone', { options: { modelAuto: 'on' } } as never, async ($, on) => {
+  test('cache-aware routing, live through the hooks: a cold Sonnet is skipped on a big warm Opus chat, Haiku moves, a cold chat moves, and a routed reply leaves the countdown alone', { ...LONG, options: { modelAuto: 'on' } } as never, async ($, on) => {
     engine(on)
     const mocked = mock.clock(on)
     on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000, percent: 10 } } }) as never)
@@ -3258,7 +3282,8 @@ describe('dashboard', () => {
     await rows.press({ key: 'e-low' })
     await rows.unmount()
     const band = await $.ui.mount(DESK_BAND)
-    expect(await drawn(band)).toContain('"color":"#d4d4d8","bold":true},"children":["Off"]')
+    // Props after bold are the app's own (newer builds add "weight":"semibold" for bold), so they may come and go.
+    expect(await drawn(band)).toMatch(/"color":"#d4d4d8","bold":true[^{}]*\},"children":\["Off"\]/)
     await band.unmount()
   })
 
