@@ -3031,7 +3031,11 @@ async function checkUpdateLook($: EngineInterface, outcome: UpdateOutcome) {
   if (!latest || !mine || !isNewer(latest.version, mine)) {
     // Up to date only when both versions were read and the newest came from a source just reached.
     outcome.found = latest && mine && fresh ? 'newest' : 'unknown'
-    if (outcome.found === 'unknown') outcome.ok = false
+    if (outcome.found === 'unknown') {
+      // A look that could not tell leaves an offer made earlier as it is: it is not news that there is nothing newer.
+      outcome.ok = false
+      return
+    }
     // Only an offer is taken back: an update started while this look ran keeps its card.
     if (shown) await update($, updateCard, c => (c && c.stage !== 'offer' ? c : null))
     // A version found earlier is stale once this one is as new (installed some other way): the button looks again.
@@ -3050,14 +3054,17 @@ const updateCheck = atom({ plugin: 'effortless', key: 'updateCheck' } as const, 
 async function checkUpdateNow($: EngineInterface) {
   await update($, updateCheck, () => 'checking')
   await $.store.set('updateHidden', null).catch(() => undefined)
-  // An Updated or failed card left from earlier made checkUpdate skip the look and the button said Up to date.
-  await update($, updateCard, c => (c && (c.stage === 'done' || c.stage === 'failed') ? null : c))
+  // An Updated or failed card left from earlier made checkUpdate skip the look and the button said Up to date; so does
+  // an updating card no update runs behind (left by a reload mid-update).
+  await update($, updateCard, c => (c && (c.stage === 'done' || c.stage === 'failed' || (c.stage === 'updating' && !updateRunning)) ? null : c))
   const found = await checkUpdate($).catch((error: unknown): UpdateFound => {
     lastUpdateCheck = `check failed: ${String(error).slice(0, 120)}`
     return 'unknown'
   })
   const card = await read($, updateCard)
-  const said = card && card.stage === 'offer' ? `found ${card.version}` : found === 'newest' ? 'newest' : 'failed'
+  // An update on its way, or one that ended while this looked (a done card, cleared before the look): the card above the
+  // prompt says so, and the button goes back to itself.
+  const said = card && card.stage === 'offer' ? `found ${card.version}` : updateRunning || card?.stage === 'done' ? 'idle' : found === 'newest' ? 'newest' : 'failed'
   await update($, updateCheck, () => said)
   // "Up to date" or the failure goes back to the button after a few seconds; a found version stays until it is
   // installed or put away.
@@ -3126,6 +3133,7 @@ async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
     if (r.exitCode !== 0) throw new Error(updateFailure(r.stderr || r.stdout) || `claude ${args.join(' ')} failed`)
   }
   let installed: string | undefined
+  let got: string | undefined
   try {
     // This install's own marketplace: effortless for users, effortless-dev on the dev channel.
     // This chat's install, before the update moves it: the CLI updates one scope (and project), and other scopes keep
@@ -3137,10 +3145,10 @@ async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
     // the folder of one of this chat's entries says the update happened. Another scope already on it does not count.
     const after = await installEntries($)
     const folders = after ? own.map(k => folderOf(after, k)).filter((x): x is string => x !== undefined) : []
-    let got: string | undefined
+    // The version offered or a newer one (released since the offer: the marketplace was just refreshed) counts.
     for (const folder of folders) {
       got = await versionAt($, folder)
-      if (got === card.version) {
+      if (got && !isNewer(card.version, got)) {
         installed = folder
         break
       }
@@ -3158,9 +3166,11 @@ async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
   // version's files go into it, or the reload would bring back the old code.
   await syncRunningCopy($, installed).catch(() => undefined)
   const now = await $.clock.now()
-  await $.store.set('updatedTo', { version: card.version, note: card.note, at: now })
+  // The version that went in, which may be newer than the one offered.
+  const done = { ...card, version: got ?? card.version }
+  await $.store.set('updatedTo', { version: done.version, note: done.note, at: now })
   // Installed, not yet running: only the new code, once loaded, says "Loaded in this chat" (afterLoad).
-  await update($, updateCard, () => ({ ...card, stage: 'done', at: now, detail: UPDATE_LOADING }))
+  await update($, updateCard, () => ({ ...done, stage: 'done', at: now, detail: UPDATE_LOADING }))
   // The reload loads the new version here; where the app takes no command from a plugin, it is typed for Enter.
   const reloaded = await $.command.run({ command: 'reload-plugins', args: RELOAD_ARGS } as never).then(() => true, () => false)
   if (!reloaded && (await typeCommand($, `/reload-plugins ${RELOAD_ARGS}`)))
@@ -4275,15 +4285,18 @@ export const register: Register = (on, options) => {
     if (arg === 'update') {
       // Asking is a decision to look, past a Later pressed earlier (as Check for updates in Settings).
       await $.store.set('updateHidden', null).catch(() => undefined)
-      // An Updated or failed card left from earlier would make the look skip itself.
-      await update($, updateCard, c => (c && (c.stage === 'done' || c.stage === 'failed') ? null : c))
+      // An Updated or failed card left from earlier would make the look skip itself; so would an updating card no
+      // update runs behind (left by a reload mid-update).
+      if (updateRunning) {
+        const running = await read($, updateCard)
+        return { text: `Already updating${running ? ` to ${running.version}` : ''}.` }
+      }
+      await update($, updateCard, c => (c && (c.stage === 'done' || c.stage === 'failed' || c.stage === 'updating') ? null : c))
       const found = await checkUpdate($).catch((error: unknown): UpdateFound => {
         lastUpdateCheck = `check failed: ${String(error).slice(0, 120)}`
         return 'unknown'
       })
       const card = await read($, updateCard)
-      // An update already on its way is not started a second time.
-      if (updateRunning || card?.stage === 'updating') return { text: `Already updating${card ? ` to ${card.version}` : ''}.` }
       if (!card || card.stage === 'done')
         return { text: found === 'newest' ? `effortless ${(await installedVersion($)) ?? ''} is the newest (${lastUpdateCheck}).` : `Could not tell whether a newer effortless is out (${lastUpdateCheck}).` }
       void runUpdate($, card)

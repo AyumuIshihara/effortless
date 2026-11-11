@@ -3914,17 +3914,11 @@ describe('updates', () => {
   test('the update check says skipped while an update card other than the offer shows', DESK, async ($, on) => {
     const w = world(on, { installed: '1.0.0', latest: '1.0.1', env: { USERPROFILE: 'C:/Users/x' } })
     const read = await renderLogAfter(w, on)
+    // The preview card in its Updated look before the load's own look (Check for updates and /effortless update clear
+    // such a card first, so only the load's look and the timed one skip).
+    await $.command.run({ command: 'effortless', args: 'card done' } as never)
     await start($)
     await settle()
-    // The preview card in its updating look, then a look for a newer version (/effortless update clears an Updated or
-    // failed card first; an updating one stays).
-    await $.command.run({ command: 'effortless', args: 'card updating' } as never)
-    w.ran.length = 0
-    const res = (await $.command.run({ command: 'effortless', args: 'update' } as never)) as { text?: string }
-    await settle()
-    // The update on its way is not started a second time.
-    expect(res.text).toContain('Already updating')
-    expect(w.ran.filter(r => r.includes('plugin update effortless@'))).toEqual([])
     const lines = updateLines(await read())
     expect(lines.some(l => / via skipped ok$/.test(l))).toBe(true)
     expect(lines.every(l => UPDATE_LINE.test(l))).toBe(true)
@@ -4047,7 +4041,7 @@ describe('updates', () => {
     await ui.unmount()
   })
 
-  test('an update fails when installed_plugins.json cannot be read, and goes through with a BOM', DESK, async ($, on) => {
+  test('an update fails when installed_plugins.json cannot be read', DESK, async ($, on) => {
     world(on, { installed: '1.0.0', latest: '1.0.1', installedList: '{ broken' })
     await start($)
     await settle()
@@ -4152,6 +4146,51 @@ describe('updates', () => {
     await settle()
     expect(w.ran.filter(r => r.includes('plugin update effortless@'))).toHaveLength(1)
     await ui.unmount()
+  })
+
+  test('a version newer than the one offered (released since) counts, and the card names the one that went in', DESK, async ($, on) => {
+    const v = { installed: '1.0.0', latest: '1.0.1', installsTo: '1.0.2' }
+    world(on, v)
+    const text = await pressUpdate($)
+    expect(text).not.toContain('Update failed')
+    v.installed = '1.0.2'
+    await start($)
+    await settle()
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    expect(await drawn(ui)).toContain('Updated to 1.0.2')
+    await ui.unmount()
+  })
+
+  test('a look that cannot tell keeps the offer made earlier', DESK, async ($, on) => {
+    const v = { installed: '1.0.0', latest: '1.0.1', webDown: false, noMarketplaceCopy: false }
+    world(on, v)
+    await start($)
+    await settle()
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(ui)
+    expect(await drawn(ui)).toContain('effortless 1.0.1 is out')
+    // Offline: no way gives a version.
+    v.webDown = true
+    v.noMarketplaceCopy = true
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await panel.press({ key: 'settings-check-update' })
+    await settle()
+    expect((await panel.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.1')
+    await panel.unmount()
+    await ui.unmount()
+  })
+
+  test('/effortless update starts over from an updating card no update runs behind (a reload mid-update)', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1' })
+    await start($)
+    await settle()
+    await $.command.run({ command: 'effortless', args: 'card updating' } as never)
+    w.ran.length = 0
+    const r = (await $.command.run({ command: 'effortless', args: 'update' } as never)) as { text?: string }
+    await settle()
+    expect(r.text).toContain('Updating to 1.0.1')
+    expect(w.ran.filter(x => x.includes('plugin update effortless@'))).toHaveLength(1)
   })
 
   test('Check for updates is not Up to date when the installed version is not a version', DESK, async ($, on) => {

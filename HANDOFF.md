@@ -7,7 +7,7 @@
 - `tools/publish.sh`・`tools/release.sh`・`tools/site.sh` は上流用なので使わない（上流の `stable` やサイトを動かす）。
 - 上流（`upstream` = HeyCubit/effortless）の取り込みは、`git fetch upstream` の後に main へマージする。未マージの上流 PR は差分を読んで、要る物を手で当て、コミットに元の PR と作者を書く。
 - 不具合・残作業は AyumuIshihara/effortless の Issue で追う。
-- `bash tools/test.sh` は、今の Claude Code では元から 16〜17 件落ちる（太字に `weight` が付くなど、試験の期待値が古い）。直した後に増えていないかを、直す前の版と比べて確かめる。
+- `bash tools/test.sh` は、Claude Code の版によっては、変更と関係なく元から落ちる試験がある（件数は版で変わる）。直した後に増えていないかを、直す前の版で同じ試験を流して比べる。
 - 計測の記録: `~/.claude/effortless-timing-<chat>-<load>-<part>.log`（描画と更新確認の所要）。描画の記録は `effortless-render-<chat>.log`。
 
 以下は上流（HeyCubit/effortless）の 2026-10 時点の引き継ぎで、当時の記録として残す。
