@@ -3836,6 +3836,8 @@ describe('updates', () => {
     const envs: (Record<string, string> | undefined)[] = []
     const cwds: (string | undefined)[] = []
     let refetched = false
+    // A fetch that fails once with git's "shallow file has changed" (another look wrote the folder), then goes through.
+    let shallowFailed = false
     on('process.run', (_$, e) => {
       // No claude where the app looks: the engine refuses to start it, as it does for a desktop-only user.
       if (v.noCli?.(e.argv[0])) return { deny: `$.process.run(${e.argv[0]}) failed to start: ENOENT: Command '${e.argv[0]}' not found or is in an unsafe location (current directory)` } as never
@@ -3850,8 +3852,13 @@ describe('updates', () => {
       if (e.argv[0] === 'git' && e.argv.includes('--refetch')) refetched = true
       if (v.showMissing && !refetched && e.argv[0] === 'git' && e.argv.includes('show')) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: bad object FETCH_HEAD:public.json' } } as never
       // A plain fetch that fails with this text (until a refetch, or for good when offline).
-      if (v.fetchFails && e.argv[0] === 'git' && e.argv.includes('fetch') && !e.argv.includes('--refetch') && !(refetched && v.fetchFails.includes('promisor')))
+      if (v.fetchFails && e.argv[0] === 'git' && e.argv.includes('fetch') && !e.argv.includes('--refetch') && !(refetched && v.fetchFails.includes('promisor'))) {
+        if (v.fetchFails.includes('shallow file has changed')) {
+          if (shallowFailed) return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+          shallowFailed = true
+        }
         return { value: { exitCode: 128, stdout: '', stderr: v.fetchFails } } as never
+      }
       const args = e.argv.slice(1).join(' ')
       if (v.marketplaceFails && args.startsWith('plugin marketplace update')) return { value: { exitCode: 1, stdout: '', stderr: 'offline' } } as never
       if (!v.fails && args.startsWith('plugin update ')) {
@@ -3997,6 +4004,29 @@ describe('updates', () => {
       if (refetches) expect((await again.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.2')
       else expect(w.ran.some(r => r.includes('show FETCH_HEAD:public.json'))).toBe(false)
     })
+
+  test('a fetch that fails with "shallow file has changed" (two looks at once) is fetched again once, and the look still goes by git', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.1', fetchFails: 'fatal: shallow file has changed since we read it', git: JSON.stringify([{ version: '1.0.2', note: 'From git.' }]) })
+    await start($)
+    await settle()
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(panel)
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const again = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await again.press({ key: 'settings-check-update' })
+    // The second fetch waits half a second first.
+    await new Promise(resolve => setTimeout(resolve, 900))
+    const fetches = w.ran.filter(r => r.startsWith('git ') && r.includes(' fetch '))
+    expect(fetches.every(r => !r.includes('--refetch'))).toBe(true)
+    // The look that failed fetches again before it reads the file (the mock fails only the first fetch, so a look that did not
+    // fetch again would reach `show` after one fetch).
+    const firstShow = w.ran.findIndex(r => r.includes('show FETCH_HEAD:public.json'))
+    expect(firstShow).toBeGreaterThan(-1)
+    expect(w.ran.slice(0, firstShow).filter(r => r.startsWith('git ') && r.includes(' fetch '))).toHaveLength(2)
+    expect(w.ran.some(r => r.includes('show FETCH_HEAD:public.json'))).toBe(true)
+    expect((await again.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.2')
+  })
 
   test('a new release-check folder gets the fork as origin and fetches its main', DESK, async ($, on) => {
     const w = world(on, { installed: '1.0.1', latest: '1.0.1', noRepo: true, git: JSON.stringify([{ version: '1.0.2', note: 'From git.' }]) })
@@ -5282,10 +5312,14 @@ describe('timing log', () => {
   }
   /** Records every write (path -> last text) and every attempt. `failFirst` makes the first attempts fail, `failing.on`
    * all of them while it is set; `gate` holds the first write of a timing part until it is released. Writes of the
-   * timing log are counted apart from the render log's: each log has one write at a time. */
-  function files(on: On, opts: { failFirst?: number; gate?: Promise<void>; noId?: boolean } = {}) {
+   * timing log are counted apart from the render log's: each log has one write at a time. `slowId.ms`, while above 0, holds
+   * each answer for the chat's id that long. */
+  function files(on: On, opts: { failFirst?: number; gate?: Promise<void>; noId?: boolean; slowId?: { ms: number } } = {}) {
     // A chat the app names, for the file.
-    on('session.id', () => (opts.noId ? ({ deny: 'no session' } as never) : ({ value: 'abcdef12-3456-7890-abcd-ef1234567890' } as never)))
+    on('session.id', async () => {
+      if (opts.slowId?.ms) await new Promise(resolve => setTimeout(resolve, opts.slowId!.ms))
+      return opts.noId ? ({ deny: 'no session' } as never) : ({ value: 'abcdef12-3456-7890-abcd-ef1234567890' } as never)
+    })
     const written: Record<string, string> = {}
     const attempts: string[] = []
     const failing = { on: false }
@@ -5326,7 +5360,8 @@ describe('timing log', () => {
       .map(([path, text]) => ({ path, lines: text.split('\n').filter(l => l !== '') }))
   const allLines = (written: Record<string, string>) => partsOf(written).flatMap(p => p.lines)
   const timed = (lines: string[]) => lines.filter(l => l.includes(' draw took '))
-  const DRAW = new RegExp(String.raw`^\d{4}-\d\d-\d\dT[\d:.]+Z (\S+) draw took (\d+) ms gap (-?\d+) ms (ok|failed)$`)
+  // A slow draw (200 ms) ends with where its time went, so the steps are an optional tail.
+  const DRAW = new RegExp(String.raw`^\d{4}-\d\d-\d\dT[\d:.]+Z (\S+) draw took (\d+) ms gap (-?\d+) ms (ok|failed)( steps restore=\d+ ask=\d+ build=\d+ app=\d+ ping=\d+)?$`)
   const TIMING_FILE = /^C:\/Users\/x\/\.claude\/effortless-timing-abcdef12-[0-9a-f]{8}-(\d{3})\.log$/
   const SURVEY = { ...(DESK_BAND as object), props: { ...BAND.props, hasSurvey: true } } as never
   const bandOn = (surface: string) => ({ plugin: 'effortless', surface, ...BAND }) as never
@@ -5349,6 +5384,11 @@ describe('timing log', () => {
     expect(drawLine('2026-11-10T12:00:00.000Z', '69d01d55', 51.4, -1, false)).toBe('2026-11-10T12:00:00.000Z 69d01d55 draw took 51 ms gap -1 ms ok')
     expect(drawLine('2026-11-10T12:00:00.000Z', '69d01d55', 300.6, 5000.2, true)).toBe('2026-11-10T12:00:00.000Z 69d01d55 draw took 301 ms gap 5000 ms failed')
     expect(DRAW.test(drawLine('2026-11-10T12:00:00.000Z', '69d01d55', 51, -1, false))).toBe(true)
+    // A slow draw adds the steps, rounded: restoring the cache, the store's ask, the build, the app's draw, and one ping.
+    const steps = { restore: 12.4, ask: 340.6, build: 0.4, app: 1000.5, ping: 7.2 }
+    expect(drawLine('2026-11-10T12:00:00.000Z', '69d01d55', 1360, 20, false, steps)).toBe(
+      '2026-11-10T12:00:00.000Z 69d01d55 draw took 1360 ms gap 20 ms ok steps restore=12 ask=341 build=0 app=1001 ping=7')
+    expect(DRAW.test(drawLine('2026-11-10T12:00:00.000Z', '69d01d55', 1360, 20, true, steps))).toBe(true)
     expect(updateLine('2026-11-10T12:00:00.000Z', '69d01d55', 812.4, 'web', true)).toBe('2026-11-10T12:00:00.000Z 69d01d55 update check 812 ms via web ok')
     expect(updateLine('2026-11-10T12:00:00.000Z', '69d01d55', 3, 'marketplace', false)).toBe('2026-11-10T12:00:00.000Z 69d01d55 update check 3 ms via marketplace failed')
     expect(updateLine('2026-11-10T12:00:00.000Z', '69d01d55', 3, 'none', false)).toBe('2026-11-10T12:00:00.000Z 69d01d55 update check 3 ms via none failed')
@@ -5467,6 +5507,30 @@ describe('timing log', () => {
     // The first draw on the other surface has no earlier ask, though desktop drew before it.
     expect(gaps[2]).toBe(-1)
     expect(lines.length).toBeGreaterThanOrEqual(10)
+  })
+
+  test('a slow draw (200 ms) ends with its steps and a ping, and a quick one has none', async ($, on) => {
+    engine(on, { USERPROFILE: 'C:/Users/x' })
+    const mocked = mock.clock(on)
+    const slowId = { ms: 0 }
+    const f = files(on, { slowId })
+    await start($, on)
+    await drawOn($, 'desktop', 1)
+    // Settings asked for: the next draw reads the chat's id to see the ask is this chat's, and the id comes 260 ms late.
+    slowId.ms = 260
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    await drawOn($, 'desktop', 1)
+    slowId.ms = 0
+    await seconds(mocked, 1)
+    const lines = timed(allLines(f.written))
+    const slow = lines.filter(l => Number(DRAW.exec(l)![2]) >= 200)
+    expect(slow).toHaveLength(1)
+    const steps = /steps restore=(\d+) ask=(\d+) build=(\d+) app=(\d+) ping=(\d+)$/.exec(slow[0]!)
+    expect(steps).not.toBeNull()
+    // The late id is in the ask step; the cache was restored by the first draw.
+    expect(Number(steps![2])).toBeGreaterThanOrEqual(250)
+    expect(Number(steps![1])).toBeLessThan(200)
+    expect(lines.filter(l => Number(DRAW.exec(l)![2]) < 200).every(l => !l.includes(' steps '))).toBe(true)
   })
 
   test('a draw that hands on to the app (a survey) leaves a line', async ($, on) => {

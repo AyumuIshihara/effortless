@@ -2494,9 +2494,16 @@ export function drawLogged(drawsSoFar: number, tookMs: number, gapMs: number, fa
   return failed || drawsSoFar <= 5 || tookMs >= 200 || gapMs >= 5000
 }
 /** One timing-log line for a draw: how long it took, how long after the previous ask (-1 for the first), how it ended. */
-export function drawLine(iso: string, session: string, tookMs: number, gapMs: number, failed: boolean): string {
-  return `${iso} ${session} draw took ${Math.round(tookMs)} ms gap ${Math.round(gapMs)} ms ${failed ? 'failed' : 'ok'}`
+export function drawLine(iso: string, session: string, tookMs: number, gapMs: number, failed: boolean, steps?: DrawSteps): string {
+  const where = steps
+    ? ` steps restore=${Math.round(steps.restore)} ask=${Math.round(steps.ask)} build=${Math.round(steps.build)} app=${Math.round(steps.app)} ping=${Math.round(steps.ping)}`
+    : ''
+  return `${iso} ${session} draw took ${Math.round(tookMs)} ms gap ${Math.round(gapMs)} ms ${failed ? 'failed' : 'ok'}${where}`
 }
+/** Where a slow draw's time went, in ms: restoring the cache, asking the store for the settings request and the chat's id,
+ * the build (all the rest before the hand-on, store reads and writes included), the app's own draw, and one round trip to
+ * the host's clock (`$.clock.now()`). */
+export type DrawSteps = { restore: number; ask: number; build: number; app: number; ping: number }
 /** One timing-log line for an update check: how long, and which way the version was found. */
 export function updateLine(iso: string, session: string, ms: number, via: UpdateVia, ok: boolean): string {
   return `${iso} ${session} update check ${Math.round(ms)} ms via ${via} ${ok ? 'ok' : 'failed'}`
@@ -2965,6 +2972,11 @@ async function latestFromGit($: EngineInterface): Promise<{ release?: { version:
     if (fetched.exitCode !== 0 && /promisor|index-pack|lazy fetching/i.test(fetched.stderr)) {
       refetched = true
       fetched = await fetch('--refetch')
+    } else if (fetched.exitCode !== 0 && /shallow file has changed/i.test(fetched.stderr)) {
+      // Two looks at once in this folder (two chats open): the other one rewrote the shallow file while this fetch ran.
+      // Waited half a second and fetched once more; a second failure is reported as it is.
+      await $.clock.sleep(500)
+      fetched = await fetch()
     }
     if (fetched.exitCode !== 0) return failed(refetched ? 'refetch' : 'fetch', fetched)
     let shown = await git('show', 'FETCH_HEAD:public.json')
@@ -5144,10 +5156,15 @@ Saved to ${out}.md and .json` }
     let drawFailed = false
     // The app's own draw, where this call hands on to it: awaited only in the timing, the call returns it as it did.
     let handed: Promise<unknown> | undefined
+    // Where the time of this draw goes, on this call's own variables (draws overlap): shown in the timing log for a slow draw.
+    let restoreMs = 0
+    let askMs = 0
     try {
     void drainSetupSave($).catch(() => undefined)
     void afterLoad($).catch(() => undefined)
+    const restoreStartedAt = performance.now()
     await restoreCache($).catch(() => undefined)
+    restoreMs = performance.now() - restoreStartedAt
     renderCalls++
     lastRenderAt = Date.now()
     void refreshAppearance($).catch(() => undefined)
@@ -5163,11 +5180,13 @@ Saved to ${out}.md and .json` }
       lastRenderBranch = 'stepped aside: the app has a survey in this spot'
       return (handed = next(e))
     }
+    const askStartedAt = performance.now()
     const asked = await $.store.get('openSettingsAt')
     const askedHere =
       asked && typeof asked === 'object' && (asked as { session?: string }).session === (await $.session.id().catch(() => ''))
         ? (asked as { at: number }).at
         : null
+    askMs = performance.now() - askStartedAt
     if (typeof askedHere === 'number') {
       await $.store.set('openSettingsAt', null)
       if (Date.now() - askedHere < 60_000 && !(await read($, settingsOpen))) await update($, settingsOpen, () => true)
@@ -6066,11 +6085,27 @@ Saved to ${out}.md and .json` }
       throw error
     } finally {
       // The time includes the app's own draw, where this call handed on to it; its failure is the app's, not rethrown here.
+      const builtAt = performance.now()
       if (handed) await handed.catch(() => { drawFailed = true })
       // How long the draws take, for the draws a load makes: the timing log says where a slow start goes.
       // Kept: a failed draw, the first five of a surface, any slow draw (200 ms), and any draw after a long quiet.
-      const tookMs = Math.round(performance.now() - drawStartedAt)
-      if (drawLogged(drawsSoFar, tookMs, Math.round(sinceLastAsk), drawFailed)) timingAdd(drawLine(new Date().toISOString(), loadedSession, tookMs, sinceLastAsk, drawFailed))
+      const endedAt = performance.now()
+      const tookMs = Math.round(endedAt - drawStartedAt)
+      if (drawLogged(drawsSoFar, tookMs, Math.round(sinceLastAsk), drawFailed)) {
+        const iso = new Date().toISOString()
+        const session = loadedSession
+        if (tookMs < 200) timingAdd(drawLine(iso, session, tookMs, sinceLastAsk, drawFailed))
+        else {
+          // A slow draw also says where its time went (DrawSteps). The ping is not awaited by the draw: a host that never
+          // answers must not hold it, and the line is then not written.
+          const steps = { restore: restoreMs, ask: askMs, build: Math.max(0, builtAt - drawStartedAt - restoreMs - askMs), app: endedAt - builtAt }
+          const pingStartedAt = performance.now()
+          void (async () => { await $.clock.now() })()
+            .catch(() => undefined)
+            .then(() => timingAdd(drawLine(iso, session, tookMs, sinceLastAsk, drawFailed, { ...steps, ping: performance.now() - pingStartedAt })))
+            .catch(() => undefined)
+        }
+      }
     }
   })
 }
