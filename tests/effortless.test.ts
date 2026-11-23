@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ, longPromptFactor, helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntryKeys, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
+import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ, longPromptFactor, helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntry, chatEntryOf, scopeArgs, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -3791,10 +3791,11 @@ describe('updates', () => {
   const DESK = { options: { layout: 'default' } } as never
   /** A session with `installed` on disk and `latest` on main; records what the mod runs. */
   type OtherInstall = { scope: string; projectPath?: string; installPath: string; version: string }
-  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; noRepo?: boolean; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string>; webDown?: boolean; noMarketplaceCopy?: boolean; installsTo?: string; installedList?: string; marketplaceFails?: boolean; others?: OtherInstall[]; othersFirst?: boolean }) {
+  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; noRepo?: boolean; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string>; webDown?: boolean; noMarketplaceCopy?: boolean; installsTo?: string; installedList?: string; marketplaceFails?: boolean; others?: OtherInstall[]; othersFirst?: boolean; mineAt?: string; root?: string; showMissing?: boolean; brokenAfterUpdate?: boolean }) {
     engine(on, v.env)
     const clock = mock.clock(on)
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    if (v.root) on('session.root', () => ({ value: v.root }) as never)
     // installed_plugins.json: this chat's entry (user scope) names the running folder until `claude plugin update`
     // moves it to the new folder and puts the latest version there; other scopes' entries stay as given.
     const installPath = v.installPath ?? '/h/.claude/plugins/cache/effortless-ayumu/effortless/installed'
@@ -3802,22 +3803,25 @@ describe('updates', () => {
     let inFolder = v.installed
     let updated = false
     let root = ''
+    // Other scopes' entries; `claude plugin update --scope` run in a project moves that project's entry instead.
+    const others = (v.others ?? []).map(o => ({ ...o }))
     on('fs.read', (_$, e) => {
       const p = String(e.path).replaceAll('\\', '/')
       const manifest = '/.claude-plugin/plugin.json'
       // The engine may hand the path on with a drive in front, so a folder is matched anywhere in it.
       if (p.endsWith(manifest)) {
-        const other = v.others?.find(o => p.includes(`${bare(o.installPath)}/`))
+        const other = others.find(o => o.installPath !== '<root>' && p.includes(`${bare(o.installPath)}/`))
         if (other) return { value: JSON.stringify({ version: other.version }) } as never
         if (p.includes(`${bare(installPath)}/`)) return { value: JSON.stringify({ version: inFolder }) } as never
         root = p.slice(0, -manifest.length)
         return { value: JSON.stringify({ version: v.installed }) } as never
       }
       if (p.endsWith('installed_plugins.json')) {
-        const mine = { scope: 'user', installPath: updated ? installPath : root }
+        if (updated && v.brokenAfterUpdate) return { value: '{ broken' } as never
+        const mine = { scope: 'user', installPath: updated ? installPath : (v.mineAt ?? root) }
         // '<root>' stands for the folder this chat runs from: another scope sharing this version's folder.
-        const others = (v.others ?? []).map(o => (o.installPath === '<root>' ? { ...o, installPath: root } : o))
-        return { value: v.installedList ?? JSON.stringify({ plugins: { 'effortless@effortless-ayumu': v.othersFirst ? [...others, mine] : [mine, ...others] } }) } as never
+        const listed = others.map(o => (o.installPath === '<root>' ? { ...o, installPath: root } : o))
+        return { value: v.installedList ?? JSON.stringify({ plugins: { 'effortless@effortless-ayumu': v.othersFirst ? [...listed, mine] : [mine, ...listed] } }) } as never
       }
       if (!v.noMarketplaceCopy && String(e.path).replaceAll('\\', '/').endsWith('marketplaces/effortless-ayumu/public.json')) return { value: JSON.stringify([{ version: v.latest, note: 'Quick and Full as one switch.' }]) } as never
       return { value: '' } as never
@@ -3830,20 +3834,31 @@ describe('updates', () => {
     })
     const ran: string[] = []
     const envs: (Record<string, string> | undefined)[] = []
+    const cwds: (string | undefined)[] = []
+    let refetched = false
     on('process.run', (_$, e) => {
       // No claude where the app looks: the engine refuses to start it, as it does for a desktop-only user.
       if (v.noCli?.(e.argv[0])) return { deny: `$.process.run(${e.argv[0]}) failed to start: ENOENT: Command '${e.argv[0]}' not found or is in an unsafe location (current directory)` } as never
       ran.push(e.argv.join(' '))
       envs.push(e.init?.env)
+      cwds.push(e.init?.cwd)
       // git show answers with public.json as it is on stable, when the test gives one.
       const stdout = e.argv[0] === 'git' && e.argv.includes('show') ? (v.git ?? '') : ''
       // A release-check folder that is not a repository yet: rev-parse fails, so the mod runs git init and adds origin.
       if (v.noRepo && e.argv[0] === 'git' && e.argv.includes('rev-parse')) return { value: { exitCode: 128, stdout: '', stderr: 'not a git repository' } } as never
+      // The newest commit fetched earlier without its files: show fails until a refetch brings them.
+      if (e.argv[0] === 'git' && e.argv.includes('--refetch')) refetched = true
+      if (v.showMissing && !refetched && e.argv[0] === 'git' && e.argv.includes('show')) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: bad object FETCH_HEAD:public.json' } } as never
       const args = e.argv.slice(1).join(' ')
       if (v.marketplaceFails && args.startsWith('plugin marketplace update')) return { value: { exitCode: 1, stdout: '', stderr: 'offline' } } as never
       if (!v.fails && args.startsWith('plugin update ')) {
-        inFolder = v.installsTo ?? v.latest
-        updated = true
+        const scope = e.argv.includes('--scope') ? e.argv[e.argv.indexOf('--scope') + 1] : undefined
+        const other = scope && scope !== 'user' ? others.find(o => o.scope === scope && o.projectPath === e.init?.cwd) : undefined
+        if (other) Object.assign(other, { installPath, version: v.installsTo ?? v.latest })
+        else if (!scope || scope === 'user') {
+          inFolder = v.installsTo ?? v.latest
+          updated = true
+        }
       }
       return { value: v.fails ? { exitCode: 1, stdout: '', stderr: v.fails } : { exitCode: 0, stdout, stderr: '' } } as never
     })
@@ -3859,7 +3874,7 @@ describe('updates', () => {
       copied.push((e as { text: string }).text)
       return { value: { isCopied: true as const } } as never
     })
-    return { clock, ran, envs, commands, commandArgs, copied }
+    return { clock, ran, envs, cwds, commands, commandArgs, copied }
   }
   const settle = () => new Promise(resolve => setTimeout(resolve, 30))
   /** Through the setup guide a first session opens, which takes the band before any card. */
@@ -3930,10 +3945,32 @@ describe('updates', () => {
     await again.press({ key: 'settings-check-update' })
     await settle()
     expect((await again.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.2')
-    expect(w.ran.some(r => r.includes('fetch -q --depth 1 --filter=blob:none origin main'))).toBe(true)
+    expect(w.ran.some(r => r.includes('fetch -q --depth 1 --filter=blob:limit=256k origin main'))).toBe(true)
+    // public.json was there: no refetch.
+    expect(w.ran.some(r => r.includes('--refetch'))).toBe(false)
     // The fork's own folder: the upstream build's folder keeps upstream as its origin.
     expect(w.ran.some(r => r.includes('effortless-AyumuIshihara-release-check') && r.includes('fetch'))).toBe(true)
     expect(w.ran.some(r => /data[\/]effortless-release-check/.test(r))).toBe(false)
+  })
+
+  test('a newest commit fetched earlier without public.json is fetched again once, and the look still goes by git', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.1', showMissing: true, git: JSON.stringify([{ version: '1.0.2', note: 'From git.' }]) })
+    await start($)
+    await settle()
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(panel)
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const again = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await again.press({ key: 'settings-check-update' })
+    await settle()
+    // 1.0.2 is on git only (the web and the marketplace say 1.0.1): found, so it came by git after the refetch.
+    expect((await again.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.2')
+    const refetches = w.ran.filter(r => r.includes('fetch -q --refetch --depth 1 --filter=blob:limit=256k origin main'))
+    expect(refetches).toHaveLength(1)
+    const refetch = w.ran.findIndex(r => r.includes('--refetch'))
+    expect(w.ran.findIndex(r => r.includes('show FETCH_HEAD:public.json'))).toBeLessThan(refetch)
+    expect(w.ran.findIndex((r, i) => i > refetch && r.includes('show FETCH_HEAD:public.json'))).toBeGreaterThan(refetch)
   })
 
   test('a new release-check folder gets the fork as origin and fetches its main', DESK, async ($, on) => {
@@ -3949,7 +3986,7 @@ describe('updates', () => {
     await settle()
     const init = w.ran.findIndex(r => r.startsWith('git init') && r.includes('effortless-AyumuIshihara-release-check'))
     const origin = w.ran.findIndex(r => r.includes('remote add origin https://github.com/AyumuIshihara/effortless.git'))
-    const fetch = w.ran.findIndex(r => r.includes('fetch -q --depth 1 --filter=blob:none origin main'))
+    const fetch = w.ran.findIndex(r => r.includes('fetch -q --depth 1 --filter=blob:limit=256k origin main'))
     expect(init).toBeGreaterThanOrEqual(0)
     expect(origin).toBeGreaterThan(init)
     expect(fetch).toBeGreaterThan(origin)
@@ -4144,15 +4181,16 @@ describe('updates', () => {
     await ui.unmount()
   })
 
-  test('an update fails when installed_plugins.json cannot be read', DESK, async ($, on) => {
-    world(on, { installed: '1.0.0', latest: '1.0.1', installedList: '{ broken' })
+  test('an update fails when installed_plugins.json cannot be read, before any claude command runs', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1', installedList: '{ broken' })
     await start($)
     await settle()
     const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
     await pastSetup(ui)
     await ui.press({ key: 'update-go' })
     await settle()
-    expect(await drawn(ui)).toContain('which install it updated could not be read')
+    expect(await drawn(ui)).toContain('could not be told')
+    expect(w.ran.some(r => r.includes('plugin update '))).toBe(false)
     await ui.unmount()
   })
 
@@ -4169,22 +4207,85 @@ describe('updates', () => {
     return text
   }
 
-  test('the install this chat runs from is found by its folder, however the folder is written', () => {
+  test("this chat's install is the first scope in the CLI's order that applies to its project", () => {
     const running = 'C:\\Users\\x\\.claude\\plugins\\cache\\effortless-ayumu\\effortless\\1.0.0'
     const user = { scope: 'user', installPath: 'c:/Users/x/.claude/plugins/cache/effortless-ayumu/effortless/1.0.0/' }
     const other = { scope: 'project', projectPath: 'C:\\work', installPath: 'C:\\Users\\x\\.claude\\plugins\\cache\\effortless-ayumu\\effortless\\0.9.0' }
+    // A Windows folder in any case, with either slash and a trailing one; other paths as written.
     expect(sameFolder(running, user.installPath)).toBe(true)
     expect(sameFolder(running, other.installPath)).toBe(false)
-    expect(ownEntryKeys([other, user], running)).toEqual(['user|'])
-    expect(ownEntryKeys([user, other], running)).toEqual(['user|'])
-    // Two scopes sharing this folder: both may be the one the CLI updates.
-    expect(ownEntryKeys([user, { ...other, installPath: running }], running)).toEqual(['user|', 'project|C:\\work'])
-    // One entry, not this folder (a working copy): that one. Two, neither this folder: none.
-    expect(ownEntryKeys([other], 'C:\\src\\effortless')).toEqual(['project|C:\\work'])
-    expect(ownEntryKeys([other, { scope: 'local', projectPath: 'C:\\b', installPath: 'C:\\y' }], 'C:\\src\\effortless')).toEqual([])
+    expect(sameFolder('C:\\Users\\x\\Repos\\Y', 'c:/users/x/repos/y/')).toBe(true)
+    expect(sameFolder('/work/Mine', '/work/mine')).toBe(false)
+    expect(ownEntry([other, user], 'C:\\elsewhere')).toBe(user)
+    expect(ownEntry([user, other], undefined)).toBe(user)
+    // The chat's own project scope comes before user, matched however the folder is written.
+    expect(ownEntry([user, other], 'c:/WORK/')).toBe(other)
+    expect(ownEntry([user, { scope: 'local', projectPath: 'C:\\work' }, other], 'C:\\work')).toEqual({ scope: 'local', projectPath: 'C:\\work' })
+    // A second update in one chat: the old folder it runs from is still named by another project's entry, which
+    // does not apply here, so that project is not the one updated.
+    const moved = { ...user, installPath: 'C:\\Users\\x\\.claude\\plugins\\cache\\effortless-ayumu\\effortless\\1.0.1' }
+    const sharedOld = { ...other, installPath: running }
+    expect(ownEntry([sharedOld, moved], 'C:\\elsewhere')).toBe(moved)
+    // Nothing that applies (another project's only), or two of one scope: none, rather than a guess.
+    expect(ownEntry([other], 'C:\\elsewhere')).toBeUndefined()
+    expect(ownEntry([other], undefined)).toBeUndefined()
+    expect(ownEntry([user, { ...user, installPath: 'C:\\z' }], 'C:\\work')).toBeUndefined()
+    expect(ownEntry([], 'C:\\work')).toBeUndefined()
+    // Used only when it names the folder this code runs from, or no local or project entry does.
+    expect(chatEntryOf([user, other], 'C:\\elsewhere', running)).toBe(user)
+    expect(chatEntryOf([moved, other], 'C:\\elsewhere', running)).toBe(moved)
+    expect(chatEntryOf([sharedOld, moved], 'C:\\elsewhere', running)).toBeUndefined()
+    expect(chatEntryOf([user, sharedOld], 'C:\\elsewhere', running)).toBe(user)
+    expect(chatEntryOf([other], 'C:\\elsewhere', running)).toBeUndefined()
+    // The CLI is told the scope, and a project's own scope runs in that project; no entry, nothing added.
+    expect(scopeArgs(user)).toEqual({ args: ['--scope', 'user'] })
+    expect(scopeArgs(other)).toEqual({ args: ['--scope', 'project'], cwd: 'C:\\work' })
+    expect(scopeArgs(undefined)).toEqual({ args: [] })
+    expect(scopeArgs({ scope: 'odd' })).toEqual({ args: [] })
     // Two entries of the same scope and project: none, rather than a guess.
     expect(folderOf([user, { ...user, installPath: 'C:\\z' }], 'user|')).toBeUndefined()
     expect(folderOf([other, user], 'user|')).toBe(user.installPath)
+  })
+
+  test('a second update in one chat updates the user scope by name, though no entry names the folder it runs from', DESK, async ($, on) => {
+    // The first update moved this chat's user entry to a newer folder; the chat still runs from the old one.
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1', mineAt: '/h/.claude/plugins/cache/effortless-ayumu/effortless/0.9.9', others: [{ scope: 'project', projectPath: '/work/other', installPath: '/h/.claude/plugins/cache/effortless-ayumu/effortless/0.9.0', version: '0.9.0' }] })
+    expect(await pressUpdate($)).not.toContain('Update failed')
+    const at = w.ran.findIndex(r => r.includes('plugin update '))
+    expect(w.ran.filter(r => r.includes('plugin update '))).toEqual(['claude plugin update effortless@effortless-ayumu --scope user'])
+    // The user scope runs in the chat's own folder, as before.
+    expect(w.cwds[at]).toBeUndefined()
+  })
+
+  test("another project's entry on the folder this chat runs from, and the user entry elsewhere: nothing is run", DESK, async ($, on) => {
+    // A second update in one chat while another project still names the old folder, or this chat running that
+    // project's install with its root told apart: which one it is cannot be told, so neither is updated.
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1', mineAt: '/h/.claude/plugins/cache/effortless-ayumu/effortless/0.9.9', others: [{ scope: 'project', projectPath: '/work/other', installPath: '<root>', version: '1.0.0' }] })
+    expect(await pressUpdate($)).toContain('could not be told')
+    expect(w.ran.some(r => r.includes('plugin update '))).toBe(false)
+  })
+
+  test('installed_plugins.json unreadable after the update: the card says which install it updated could not be read', DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1', brokenAfterUpdate: true })
+    expect(await pressUpdate($)).toContain('which install it updated could not be read')
+    expect(w.ran.filter(r => r.includes('plugin update '))).toEqual(['claude plugin update effortless@effortless-ayumu --scope user'])
+  })
+
+  test('two entries of the scope this chat would use: nothing is run, and the card says so', DESK, async ($, on) => {
+    const a = '/h/.claude/plugins/cache/effortless-ayumu/effortless/1.0.0'
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1', installedList: JSON.stringify({ plugins: { 'effortless@effortless-ayumu': [{ scope: 'user', installPath: a }, { scope: 'user', installPath: '/h/x' }] } }) })
+    const text = await pressUpdate($)
+    expect(text).toContain('could not be told')
+    // (The look for updates refreshes the marketplace on its own; the update itself runs no claude command.)
+    expect(w.ran.some(r => r.includes('plugin update '))).toBe(false)
+  })
+
+  test("this project's own install is updated by its scope, run in the project", DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1', root: '/work/mine', others: [{ scope: 'project', projectPath: '/work/mine', installPath: '<root>', version: '1.0.0' }] })
+    expect(await pressUpdate($)).not.toContain('Update failed')
+    const at = w.ran.findIndex(r => r.includes('plugin update '))
+    expect(w.ran[at]).toBe('claude plugin update effortless@effortless-ayumu --scope project')
+    expect(w.cwds[at]).toBe('/work/mine')
   })
 
   test('installed_plugins.json with a BOM is read', DESK, async ($, on) => {
@@ -4376,7 +4477,7 @@ describe('updates', () => {
     w.ran.length = 0
     await ui.press({ key: 'update-go' })
     await settle()
-    expect(w.ran).toEqual(['claude plugin marketplace update effortless-ayumu', 'claude plugin update effortless@effortless-ayumu'])
+    expect(w.ran).toEqual(['claude plugin marketplace update effortless-ayumu', 'claude plugin update effortless@effortless-ayumu --scope user'])
     expect(w.commands).toContain('/reload-plugins')
     // Forced: a plain reload holds the new version back to keep the cache, and the old code would go on running.
     expect(w.commandArgs).toContain('/reload-plugins --force')
@@ -4459,10 +4560,58 @@ describe('updates', () => {
     expect(await drawn(ui)).toContain('Press again to uninstall')
     await ui.press({ key: 'settings-uninstall' })
     await settle()
-    expect(w.ran).toEqual(['claude plugin uninstall effortless@effortless-ayumu'])
+    expect(w.ran).toEqual(['claude plugin uninstall effortless@effortless-ayumu --scope user'])
     expect(w.commands).toContain('/reload-plugins')
     await ui.unmount()
   })
+
+  /** Uninstall pressed twice in the world `on` was given: the toasts it showed. */
+  async function pressUninstall($: Engine, on: On, w: { ran: string[] }) {
+    const toasts: string[] = []
+    on('ui.toast', (_$, e) => {
+      toasts.push(String((e as { text?: unknown }).text ?? JSON.stringify(e)))
+      return { value: undefined } as never
+    })
+    await start($)
+    await settle()
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(ui)
+    await ui.press({ key: 'dash-settings' })
+    await ui.press({ key: 'settings-card-show' })
+    w.ran.length = 0
+    await ui.press({ key: 'settings-uninstall' })
+    await ui.press({ key: 'settings-uninstall' })
+    await settle()
+    await ui.unmount()
+    return toasts
+  }
+
+  test("Uninstall of this project's local install names its scope and runs in the project", DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.1', root: '/work/mine', others: [{ scope: 'local', projectPath: '/work/mine', installPath: '<root>', version: '1.0.1' }] })
+    await pressUninstall($, on, w)
+    expect(w.ran).toEqual(['claude plugin uninstall effortless@effortless-ayumu --scope local'])
+    expect(w.cwds[w.cwds.length - 1]).toBe('/work/mine')
+  })
+
+  test("Uninstall of the project's shared install runs nothing and says to use a terminal", DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.1', latest: '1.0.1', root: '/work/mine', others: [{ scope: 'project', projectPath: '/work/mine', installPath: '<root>', version: '1.0.1' }] })
+    const toasts = await pressUninstall($, on, w)
+    expect(w.ran.some(r => r.includes('plugin uninstall'))).toBe(false)
+    expect(toasts.join('\n')).toContain('--scope project')
+    expect(w.commands).not.toContain('/reload-plugins')
+  })
+
+  for (const [what, list] of [
+    ['a managed install', [{ scope: 'managed', installPath: '/h/m' }]],
+    ['an install that cannot be told', [{ scope: 'user', installPath: '/h/a' }, { scope: 'user', installPath: '/h/b' }]],
+  ] as const)
+    test(`Uninstall of ${what} runs nothing and says why`, DESK, async ($, on) => {
+      const w = world(on, { installed: '1.0.1', latest: '1.0.1', installedList: JSON.stringify({ plugins: { 'effortless@effortless-ayumu': list } }) })
+      const toasts = await pressUninstall($, on, w)
+      expect(w.ran.some(r => r.includes('plugin uninstall'))).toBe(false)
+      expect(toasts.join('\n')).toContain('did not uninstall')
+      expect(w.commands).not.toContain('/reload-plugins')
+    })
 
   test('a failed update says why and offers to try again', DESK, async ($, on) => {
     world(on, { installed: '1.0.0', latest: '1.0.1', fails: 'network down' })
@@ -4512,7 +4661,7 @@ describe('updates', () => {
     await pastSetup(ui)
     await ui.press({ key: 'update-go' })
     await settle()
-    expect(w.ran.filter(r => r.includes('plugin update effortless@'))).toEqual(['C:/Users/friend/.local/bin/claude.exe plugin update effortless@effortless-ayumu'])
+    expect(w.ran.filter(r => r.includes('plugin update effortless@'))).toEqual(['C:/Users/friend/.local/bin/claude.exe plugin update effortless@effortless-ayumu --scope user'])
     expect(await drawn(ui)).toContain('Updated to 1.0.1')
     await ui.unmount()
   })
@@ -4545,7 +4694,7 @@ describe('updates', () => {
     await ui.press({ key: 'update-go' })
     await settle()
     const steps = w.ran.map((r, i) => [r, w.envs[i]] as const).filter(([r]) => r.startsWith('claude plugin'))
-    expect(steps.slice(-2).map(([r]) => r)).toEqual(['claude plugin marketplace update effortless-ayumu', 'claude plugin update effortless@effortless-ayumu'])
+    expect(steps.slice(-2).map(([r]) => r)).toEqual(['claude plugin marketplace update effortless-ayumu', 'claude plugin update effortless@effortless-ayumu --scope user'])
     for (const [, env] of steps) expect(env).toMatchObject({ GIT_CONFIG_KEY_0: 'url.https://github.com/AyumuIshihara/.insteadOf', GIT_CONFIG_VALUE_0: 'git@github.com:AyumuIshihara/' })
     await ui.unmount()
   })

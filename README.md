@@ -82,8 +82,9 @@ Or in a terminal. `claude plugin list` shows whether the upstream build is insta
 claude plugin uninstall effortless@effortless && claude plugin marketplace add AyumuIshihara/effortless && claude plugin install effortless@effortless-ayumu
 ```
 
-Loaded from a folder instead (`--plugin-dir`), the mod still takes itself for `effortless@effortless-ayumu`: Update and
-Uninstall in its settings then act on that installed copy, not on the folder.
+Loaded from a folder instead (`--plugin-dir`), the mod cannot tell which installed copy is its own: Update and Uninstall
+in its settings run nothing and say so. Update or uninstall the installed copy in a terminal with `claude plugin update`
+or `claude plugin uninstall` and its `--scope`.
 
 Then run `/reload-plugins` (or restart Claude Code). A short setup opens above the prompt: keep **Haiku** alone (one click,
 no key, runs on your own Claude login) or add **Jev** (a TypeSafe key, about 4x faster effort calls), lean cheaper or

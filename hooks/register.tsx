@@ -2779,7 +2779,25 @@ function uninstallButton($: EngineInterface, els: ReturnType<EngineInterface['ui
     }
     uninstalling = true
     $.ui.invalidate('ui.render')
-    const r = await runClaude($, ['plugin', 'uninstall', pluginId($)], { timeoutMs: 120_000 }).catch(error => ({ exitCode: 1, stdout: '', stderr: String(error) }))
+    // This chat's scope, as for an update: without one the CLI uninstalls the user scope's, which may not be this chat's.
+    // Not told, nothing runs. A managed install is the administrator's (the CLI does not uninstall it), and a project
+    // scope's is in the project's shared settings, so both are left to a terminal.
+    const own = await chatEntry($)
+    const refusal = !own
+      ? noOwnEntry('uninstall')
+      : own.scope === 'managed'
+        ? 'it was installed by your administrator (managed), so it cannot be uninstalled here.'
+        : own.scope === 'project'
+          ? `it is installed for this project in the project's shared settings, so others may use it: uninstall it in a terminal in ${String(own.projectPath)} with claude plugin uninstall --scope project.`
+          : undefined
+    if (refusal) {
+      uninstalling = false
+      $.ui.toast(`effortless: did not uninstall: ${refusal}`)
+      $.ui.invalidate('ui.render')
+      return
+    }
+    const scope = scopeArgs(own)
+    const r = await runClaude($, ['plugin', 'uninstall', pluginId($), ...scope.args], { timeoutMs: 120_000, ...(scope.cwd ? { cwd: scope.cwd } : {}) }).catch(error => ({ exitCode: 1, stdout: '', stderr: String(error) }))
     uninstalling = false
     if (r.exitCode !== 0) {
       const why = (r.stderr || r.stdout).trim().split('\n').pop() ?? ''
@@ -2919,7 +2937,7 @@ const installedVersion = ($: EngineInterface) => versionAt($, $.plugin.root)
 /** Looks for a newer version and offers it, unless ✕ put that version away less than UPDATE_SNOOZE_MS ago. */
 // What the last check found, for /effortless update to say (installed, git, web, marketplace).
 let lastUpdateCheck = 'not checked yet'
-/** public.json as it is on RELEASE_BRANCH, read with git: a depth-1 fetch without file contents into a small repo of its own, then
+/** public.json as it is on RELEASE_BRANCH, read with git: a depth-1 fetch without large files into a small repo of its own, then
  * the one file. Git has no cache in the way, unlike the host's web fetch, and works on the dev channel too. */
 async function latestFromGit($: EngineInterface): Promise<{ release?: { version: string; note: string }; why: string }> {
   // Its own folder: the upstream build's folder has upstream as origin, and git init runs only on a new folder.
@@ -2932,9 +2950,20 @@ async function latestFromGit($: EngineInterface): Promise<{ release?: { version:
       await $.process.run(['git', 'init', '-q', dir], { timeoutMs: 30_000 })
       await git('remote', 'add', 'origin', `${REPO_URL}.git`)
     }
-    const fetched = await git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', RELEASE_BRANCH)
+    // Small files come with the fetch. A file left out (blob:none, as before 1.72.11) is not fetched later by
+    // `git show` where git runs with GIT_NO_LAZY_FETCH=1, which the Claude Code CLI sets for the git it runs.
+    const fetch = (...extra: string[]) => git('fetch', '-q', ...extra, '--depth', '1', '--filter=blob:limit=256k', 'origin', RELEASE_BRANCH)
+    const fetched = await fetch()
     if (fetched.exitCode !== 0) return failed('fetch', fetched)
-    const shown = await git('show', 'FETCH_HEAD:public.json')
+    let shown = await git('show', 'FETCH_HEAD:public.json')
+    if (shown.exitCode !== 0 && /bad object|missing|could not read/i.test(shown.stderr)) {
+      // The newest commit came earlier without its files (blob:none): fetching it again sends nothing, so refetch it once.
+      // Only for a file missing here, not for a public.json gone. One of 256 KiB or more is never fetched (the filter
+      // leaves it out), so it would be refetched on every look: the look then goes the web way as before.
+      const refetched = await fetch('--refetch')
+      if (refetched.exitCode !== 0) return failed('refetch', refetched)
+      shown = await git('show', 'FETCH_HEAD:public.json')
+    }
     if (shown.exitCode !== 0) return failed('show', shown)
     const release = latestRelease(shown.stdout)
     return release ? { release, why: `git ${release.version}` } : { why: 'git: public.json unreadable' }
@@ -3160,23 +3189,27 @@ async function runUpdate($: EngineInterface, card: UpdateCard) {
 }
 async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
   await update($, updateCard, () => ({ ...card, stage: 'updating' }))
-  const step = async (args: string[]) => {
-    const r = await runClaude($, args, { timeoutMs: 180_000, env: GITHUB_OVER_HTTPS })
+  const step = async (args: string[], cwd?: string) => {
+    const r = await runClaude($, args, { timeoutMs: 180_000, env: GITHUB_OVER_HTTPS, ...(cwd ? { cwd } : {}) })
     if (r.exitCode !== 0) throw new Error(updateFailure(r.stderr || r.stdout) || `claude ${args.join(' ')} failed`)
   }
   let installed: string | undefined
   let got: string | undefined
   try {
-    // This install's own marketplace: effortless for users, effortless-dev on the dev channel.
     // This chat's install, before the update moves it: the CLI updates one scope (and project), and other scopes keep
-    // their own folders and versions.
-    const own = ownEntryKeys((await installEntries($)) ?? [], $.plugin.root)
+    // their own folders and versions. Its scope is named, and a project's own scope updated from that project, so the
+    // CLI does not pick one by the folder it happens to run in.
+    const own = await chatEntry($)
+    // Not told: the CLI would pick a scope by itself, maybe another project's, so nothing runs.
+    if (!own) throw new Error(noOwnEntry('update'))
+    const scope = scopeArgs(own)
+    // This install's own marketplace: effortless for users, effortless-dev on the dev channel.
     await step(['plugin', 'marketplace', 'update', pluginId($).split('@')[1]])
-    await step(['plugin', 'update', pluginId($)])
+    await step(['plugin', 'update', pluginId($), ...scope.args], scope.cwd)
     // The CLI also ends with 0 when it installed nothing (already up to date by its own look): only the version now in
-    // the folder of one of this chat's entries says the update happened. Another scope already on it does not count.
+    // the folder of this chat's entry says the update happened. Another scope already on it does not count.
     const after = await installEntries($)
-    const folders = after ? own.map(k => folderOf(after, k)).filter((x): x is string => x !== undefined) : []
+    const folders = after ? [folderOf(after, entryKey(own))].filter((x): x is string => x !== undefined) : []
     // The version offered or a newer one (released since the offer: the marketplace was just refreshed) counts.
     for (const folder of folders) {
       got = await versionAt($, folder)
@@ -3232,23 +3265,57 @@ async function installEntries($: EngineInterface): Promise<InstallEntry[] | unde
     return undefined
   }
 }
-/** Whether two folders are the same, written with either slash, a trailing one or a drive letter in either case. */
+/** Whether two folders are the same, written with either slash or a trailing one; a Windows path (a drive or a
+ * backslash in either) in any case, as Windows folders are. */
 export function sameFolder(a: string, b: string): boolean {
-  const norm = (x: string) => x.replaceAll('\\', '/').replace(/\/+$/, '').replace(/^[A-Za-z]:/, d => d.toLowerCase())
+  const win = [a, b].some(x => /^[A-Za-z]:|\\/.test(x))
+  const norm = (x: string) => {
+    const y = x.replaceAll('\\', '/').replace(/\/+$/, '')
+    return win ? y.toLowerCase() : y
+  }
   return norm(a) === norm(b)
 }
-/** The entries that may be this chat's, by scope and project as keys: those that name the folder this code runs from
- * (several scopes can share one version's folder, and the CLI picks one by the project it runs in); with one entry
- * only, that one; otherwise none (a working copy, or no way to tell). */
-export function ownEntryKeys(entries: readonly InstallEntry[], running: string): string[] {
-  const key = (e: InstallEntry) => `${String(e.scope ?? '')}|${String(e.projectPath ?? '')}`
-  const mine = entries.filter(e => typeof e.installPath === 'string' && sameFolder(e.installPath, running))
-  if (mine.length) return mine.map(key)
-  return entries.length === 1 ? [key(entries[0]!)] : []
+/** The order the CLI looks through scopes for a project when no scope is given (the first one installed wins). */
+const SCOPE_ORDER = ['local', 'project', 'user', 'managed']
+const entryKey = (e: InstallEntry) => `${String(e.scope ?? '')}|${String(e.projectPath ?? '')}`
+/** This chat's entry: the first in the CLI's order that applies to the chat's project (local and project scopes only to
+ * their own project). Not the one naming the folder this code runs from: a second update in one chat runs from the old
+ * folder, which another scope may still name. None when that scope has two entries or nothing applies. */
+export function ownEntry(entries: readonly InstallEntry[], project: string | undefined): InstallEntry | undefined {
+  const applies = (e: InstallEntry) =>
+    e.scope === 'user' || e.scope === 'managed' || ((e.scope === 'local' || e.scope === 'project') && typeof e.projectPath === 'string' && !!project && sameFolder(e.projectPath, project))
+  for (const scope of SCOPE_ORDER) {
+    const found = entries.filter(e => e.scope === scope && applies(e))
+    if (found.length) return found.length === 1 ? found[0] : undefined
+  }
+  return undefined
+}
+/** `ownEntry`, unless it does not name the folder this code runs from while a local or project entry does: then the
+ * chat may run that one (its project root told apart from the entry's), and neither is guessed. A second update in one
+ * chat stops here too when another project's entry still names the old folder. Not guarded: a local or project entry
+ * picked for a root the chat moved to (/cd) while a user entry names the folder this code runs from. */
+export function chatEntryOf(entries: readonly InstallEntry[], project: string | undefined, running: string): InstallEntry | undefined {
+  const own = ownEntry(entries, project)
+  if (!own) return undefined
+  const onRunning = (e: InstallEntry) => typeof e.installPath === 'string' && sameFolder(e.installPath, running)
+  if (!onRunning(own) && entries.some(e => e !== own && (e.scope === 'local' || e.scope === 'project') && onRunning(e))) return undefined
+  return own
+}
+const chatEntry = async ($: EngineInterface) => chatEntryOf((await installEntries($)) ?? [], await $.session.root().catch(() => undefined), $.plugin.root)
+/** Said when this chat's entry cannot be told, and so nothing is run. */
+const noOwnEntry = (what: 'update' | 'uninstall') => {
+  const text = `which install this chat runs from could not be told (from installed_plugins.json, or this chat loads effortless from a folder), so nothing was run: ${what} it in a terminal with claude plugin ${what} --scope <scope>, in the project's folder for a project or local scope.`
+  return what === 'update' ? text[0]!.toUpperCase() + text.slice(1) : text
+}
+/** `--scope` for the CLI, and the folder to run it in for a project's own scope, for `entry`; nothing for none. */
+export function scopeArgs(entry: InstallEntry | undefined): { args: string[]; cwd?: string } {
+  if (!entry || typeof entry.scope !== 'string' || !SCOPE_ORDER.includes(entry.scope)) return { args: [] }
+  const cwd = (entry.scope === 'local' || entry.scope === 'project') && typeof entry.projectPath === 'string' ? entry.projectPath : undefined
+  return { args: ['--scope', entry.scope], ...(cwd ? { cwd } : {}) }
 }
 /** The folder of the entry with `key` now, or nothing. */
 export function folderOf(entries: readonly InstallEntry[], key: string): string | undefined {
-  const found = entries.filter(e => `${String(e.scope ?? '')}|${String(e.projectPath ?? '')}` === key)
+  const found = entries.filter(e => entryKey(e) === key)
   return found.length === 1 && typeof found[0]!.installPath === 'string' ? found[0]!.installPath : undefined
 }
 /** Copies the files of the version just installed into the folder this chat runs from, when the two differ. A failed
