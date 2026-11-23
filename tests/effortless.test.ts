@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { routeTo, asOffered, modelArg, MODEL_PRICE, helperFloor, namedEffort, hotVisible,looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntryKeys, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
+import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ,helperFloor, namedEffort, hotVisible,looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntryKeys, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -165,13 +165,29 @@ describe('auto', () => {
     // Opus chat, cache warm: a cold Sonnet writes the whole chat and costs more; a warm Sonnet is far cheaper.
     expect(routeWorth('sonnet', 'opus', big, { to: false, inUse: true })).toBe(false)
     expect(routeWorth('sonnet', 'opus', big, { to: true, inUse: true })).toBe(true)
-    // A cold Haiku writes the whole chat (a third of the price, 1.25 times) against a warm Opus read (twice the price, a tenth): still more.
+    // A cold Haiku writes the whole chat (twice its input price) against a warm Opus read (MODEL_READ): still more.
     expect(routeWorth('haiku', 'opus', big, { to: false, inUse: true })).toBe(false)
     expect(routeWorth('haiku', 'opus', big, { to: true, inUse: true })).toBe(true)
     // The chat's own cache gone cold: staying would write it all again on Opus, so Sonnet wins even cold.
     expect(routeWorth('sonnet', 'opus', big, { to: false, inUse: false })).toBe(true)
     // No context size known: route as before.
     expect(routeWorth('sonnet', 'opus', 0, { to: false, inUse: true })).toBe(true)
+  })
+
+  test('routeWorth: a warm cache is read at each model\'s own cache price, not one share of its input price', () => {
+    // At today's prices the decisions are the ones the old share gave too; the MODEL_READ lines at the end hold the prices.
+    const big = 100_000
+    // A cache read is $0.20 a million tokens on Mythos 5.2, Fable 5.2 and Opus 5.5 alike: moving from a warm Mythos or
+    // Fable chat to a warm Opus reads the context at the same cost, and the prompt and answer cost less on Opus, so it pays.
+    expect(routeWorth('opus', 'mythos', big, { to: true, inUse: true })).toBe(true)
+    expect(routeWorth('opus', 'fable', big, { to: true, inUse: true })).toBe(true)
+    expect(routeWorth('sonnet', 'mythos', big, { to: true, inUse: true })).toBe(true)
+    // A cold Sonnet writes the whole chat, far more than reading the warm Mythos cache.
+    expect(routeWorth('sonnet', 'mythos', big, { to: false, inUse: true })).toBe(false)
+    // A cold Opus writes the whole chat, far more than reading Mythos's warm cache.
+    expect(routeWorth('opus', 'mythos', big, { to: false, inUse: true })).toBe(false)
+    expect(MODEL_READ.mythos).toBe(MODEL_READ.opus)
+    expect(MODEL_READ.sonnet).toBe(MODEL_READ.opus / 2)
   })
 
   test('a prompt the judge calls simple runs on Haiku 5.5; the next hard one is back on the chat model', { options: { modelAuto: 'on' } } as never, async ($, on) => {
@@ -708,6 +724,16 @@ describe('helpers', () => {
     expect(cacheSafe('claude-mythos-5-20')).toBe(false)
     expect(cacheSafe('claude-opus-4-8')).toBe(false)
     expect(cacheSafe('claude-opus-5')).toBe(false)
+    // Only the measured ids, with a date or [1m]: another suffix or a platform prefix (Bedrock) pauses.
+    expect(cacheSafe('claude-opus-5-5-20261101[1m]')).toBe(true)
+    expect(cacheSafe('claude-mythos-5-2-preview')).toBe(false)
+    expect(cacheSafe('global.anthropic.claude-mythos-5-2')).toBe(false)
+    expect(cacheSafe('anthropic.claude-opus-5-5')).toBe(false)
+    expect(cacheSafe('us.anthropic.claude-opus-5-5')).toBe(false)
+    expect(cacheSafe('claude-opus-5-5@20261101')).toBe(false)
+    expect(cacheSafe('claude-opus-5-5[1M]')).toBe(true)
+    expect(cacheSafe('x-claude-opus-5-5')).toBe(false)
+    expect(cacheSafe('claude-opus-5-5-2026')).toBe(false)
   })
 
   test('parseJevKey reads the key line, quoted or not, and nothing else', () => {

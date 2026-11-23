@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.72.9",
+    "date": "2026-11-23",
+    "note": "節約の見積りと、Auto を動かすモデルの見分け方を直す",
+    "detail": [
+      "安いモデルへ回すかの見積りで、温かいキャッシュの読み取りを、モデルごとの料金（Sonnet 5.5 は $0.10、Opus 5.5・Fable 5.2・Mythos 5.2 は $0.20）で数える。今までは入力の価格の 1 割で数えていて、読み続ける費用を Fable・Mythos では 4 倍、Opus・Sonnet では 2 倍に見積もっていた。今の料金では、回すかどうかの結論は変わらない（文脈の費用が同じ温かい Fable・Mythos と温かい Opus では、安い Opus へ回す）。",
+      "Auto を動かすのは、計測したモデルの ID（日付と [1m] は付いてよい）に全体が一致するときだけにする。Bedrock の ID（anthropic.・global.anthropic.・us.anthropic. などが付く）、Agent Platform の日付付きの ID（@ で日付が付く）、preview などの知らない接尾辞の ID では止まる。"
+    ],
+    "public": true
+  },
+  {
     "version": "1.72.8",
     "date": "2026-11-23",
     "note": "Mythos 5.2 の会話でも Auto がエフォートを選ぶ",

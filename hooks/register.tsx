@@ -27,8 +27,10 @@ const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
 // prompt-caching docs; measured 2026-11-10 on 2.1.321: low -> high and high -> low read the same cache as an unchanged
 // effort). Mythos 5.2, the same model as Fable 5.2, keeps it too (measured 2026-11-23 on 2.1.330: after a 116k-token
 // turn, the next one read 115,943 cached tokens and wrote about 3,150 with low -> low, low -> high and high -> low alike).
-// Listed by version, so a model not checked yet pauses.
-export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5|(fable|mythos)-5-2(?!\d)/.test(modelId)
+// Listed by version, so a model not checked yet pauses. The whole id must be one of these, with nothing more than a date
+// or [1m] after it: an id with another suffix (a preview) or a platform prefix (Bedrock's anthropic., global.anthropic.,
+// us.anthropic. and so on, where Claude Code's docs say an effort change rewrites the cache) pauses too.
+export const cacheSafe = (modelId: string) => /^claude-((opus|sonnet)-5-5|(fable|mythos)-5-2)(-\d{8})?(\[1[mM]\])?$/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -2534,18 +2536,24 @@ export function asOffered(verdict: ModelKey, inUse: ModelKey): ModelKey {
 // What one input token costs on each model, in Sonnet's price: Opus about 2x (measured: the same prompt cost 1.97x on Opus), Haiku about a third, Fable and Mythos 4x ($8 against $2 a million input tokens). These are the ratios
 // the savings estimate uses; they only have to be right enough to tell which side of a switch is cheaper.
 export const MODEL_PRICE: Record<ModelKey, number> = { haiku: 1 / 3, sonnet: 1, opus: 2, fable: 4, mythos: 4 }
+// What reading the chat's context from a warm cache costs on each model, in Sonnet's input price. Not one share of the
+// input price everywhere: a cache read is $0.10 a million tokens on Sonnet 5.5 and $0.20 on Opus 5.5, Fable 5.2 and
+// Mythos 5.2 alike. Haiku's is not checked, so it keeps the share the other weights use.
+export const MODEL_READ: Record<ModelKey, number> = { haiku: MODEL_PRICE.haiku * WEIGHT.read, sonnet: 0.05, opus: 0.1, fable: 0.1, mythos: 0.1 }
 /**
- * Whether sending this one prompt to a cheaper model pays. The chat's context is read from the cache (a tenth of the input
- * price) where that model's cache is warm, and written to it (1.25 times) where it is cold. A switch to a cold model
- * writes the whole context first, which can cost more than staying on the chat's own warm one at a low effort.
+ * Whether sending this one prompt to a cheaper model pays. The chat's context is read from the cache (MODEL_READ) where
+ * that model's cache is warm, and written to it where it is cold. A switch to a cold model writes the whole context
+ * first, which can cost more than staying on the chat's own warm one at a low effort. Where the context costs the same
+ * on both (a warm Mythos or Fable and a warm Opus read at $0.20 alike), the switch still pays: the model routed to is
+ * always the cheaper one, so the prompt's new input and the answer cost less there.
  */
 export function routeWorth(to: ModelKey, inUse: ModelKey, contextTokens: number, warm: { to: boolean; inUse: boolean }): boolean {
   if (!(contextTokens > 0)) return true
   // Claude Code writes the 1-hour cache, which costs twice the input price (measured), not the 5-minute 1.25.
   const write = 2
-  const stay = contextTokens * MODEL_PRICE[inUse] * (warm.inUse ? WEIGHT.read : write)
-  const move = contextTokens * MODEL_PRICE[to] * (warm.to ? WEIGHT.read : write)
-  return move < stay
+  const stay = contextTokens * (warm.inUse ? MODEL_READ[inUse] : MODEL_PRICE[inUse] * write)
+  const move = contextTokens * (warm.to ? MODEL_READ[to] : MODEL_PRICE[to] * write)
+  return move <= stay
 }
 // Until when each model's prompt cache is warm for this chat: set by every main response on it.
 const warmUntil: Partial<Record<ModelKey, number>> = {}
