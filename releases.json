@@ -1,5 +1,17 @@
 [
   {
+    "version": "1.72.8",
+    "date": "2026-11-23",
+    "note": "Mythos 5.2 の会話でも Auto がエフォートを選ぶ",
+    "detail": [
+      "Mythos 5.2 をモデルの一覧に足す。Fable 5.2 と同じモデルなので、上限は Fable/Mythos max を使い、判定役が Mythos を選んでも、ほかのモデルの会話の依頼を Mythos へは振り分けない。Fable と Mythos の間の切り替えは提案せず、ほかのモデルの会話で Mythos が選ばれたときは Fable を提案する。モデルの行の Mythos のボタンは、会話が Mythos のときだけ出し、/model claude-mythos-5-2 を送る。",
+      "Claude Code 2.1.330 での計測で、エフォートを変えてもキャッシュが保たれたので、Mythos 5.2 でも Auto を止めない。",
+      "Agent の呼び出しや定義で強さを指定したサブエージェントは、その強さのまま送る（今までは Auto の値に置き換えていた）。",
+      "節約の見積りに使う価格比を、Fable・Mythos とも今の料金（Sonnet の 4 倍）に直す。"
+    ],
+    "public": true
+  },
+  {
     "version": "1.72.7",
     "date": "2026-11-11",
     "note": "判定役が、デスクトップアプリが付けるリマインダーでなく本人の文を読む",

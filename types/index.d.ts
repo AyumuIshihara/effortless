@@ -1,4 +1,4 @@
-export type ModelKey = 'haiku' | 'sonnet' | 'opus' | 'fable'
+export type ModelKey = 'haiku' | 'sonnet' | 'opus' | 'fable' | 'mythos'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** What the prompts Auto steered cost, measured: tokens by kind, and per effort the prompts and their weighted cost. */
@@ -44,7 +44,7 @@ export type SettingsDraft = {
   bias?: string
   floor?: string
   ceiling?: string
-  /** same (follows ceiling) or an effort: Auto's Max on Fable alone. */
+  /** same (follows ceiling) or an effort: Auto's Max on Fable and Mythos alone. */
   fableCeiling?: string
   judge?: string
   handoffAfter?: string

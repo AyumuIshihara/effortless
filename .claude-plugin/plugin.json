@@ -1,6 +1,6 @@
 {
   "name": "effortless",
-  "version": "1.72.7",
+  "version": "1.72.8",
   "description": "Sets the reasoning effort for every prompt automatically, shows it under the prompt box, and counts down how long the prompt cache stays warm.",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -80,8 +80,8 @@
     },
     "fableEffortCeiling": {
       "type": "string",
-      "title": "Never above on Fable",
-      "description": "On Fable, Auto never picks a higher effort than this. same follows Never above.",
+      "title": "Never above on Fable/Mythos",
+      "description": "On Fable and Mythos, Auto never picks a higher effort than this. same follows Never above.",
       "default": "same",
       "options": [
         "same",

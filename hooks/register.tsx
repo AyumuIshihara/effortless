@@ -14,6 +14,7 @@ export const MODELS: { key: ModelKey; label: string; long: string; id: string }[
   { key: 'sonnet', label: 'Sonnet', long: 'Sonnet 5.5', id: 'claude-sonnet-5-5' },
   { key: 'opus', label: 'Opus', long: 'Opus 5.5', id: 'claude-opus-5-5' },
   { key: 'fable', label: 'Fable', long: 'Fable 5.2', id: 'claude-fable-5-2' },
+  { key: 'mythos', label: 'Mythos', long: 'Mythos 5.2', id: 'claude-mythos-5-2' },
 ]
 export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // What one token costs relative to an uncached input token, the same ratios on every Claude model. Measured over
@@ -24,8 +25,10 @@ const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
 // before Claude Code 2.1.260, the next request rewrote 56-100% of the cache (measured), which costs more than any
 // effort can save; the mod does not read Claude Code's version, so Fable 5.1 pauses. Fable 5.2 keeps it (Claude Code's
 // prompt-caching docs; measured 2026-11-10 on 2.1.321: low -> high and high -> low read the same cache as an unchanged
-// effort). Listed by version, so a model not checked yet pauses.
-export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5|fable-5-2(?!\d)/.test(modelId)
+// effort). Mythos 5.2, the same model as Fable 5.2, keeps it too (measured 2026-11-23 on 2.1.330: after a 116k-token
+// turn, the next one read 115,943 cached tokens and wrote about 3,150 with low -> low, low -> high and high -> low alike).
+// Listed by version, so a model not checked yet pauses.
+export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5|(fable|mythos)-5-2(?!\d)/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -357,10 +360,11 @@ Models, cheapest first:
 - sonnet: normal coding, edits across a few files, explanations, writing.
 - opus: hard debugging, architecture, large refactors, careful reviews.
 - fable: the hardest long-horizon or research-level work.
+- mythos: the same model as fable (same strength and price), for organizations Anthropic has verified. Pick it only when Current is mythos and fable would be picked; otherwise pick fable.
 
 Effort: low for quick answers, medium for normal work, high for hard problems, xhigh or max only for very hard ones.
 
-Effort is relative to the model in use ("Current" names it): a stronger model needs less effort for the same job. Opus at medium does about what Sonnet does at high, and Fable is stronger again. So for one and the same task pick one step lower on Opus than on Sonnet, and lower still on Fable; on Sonnet, go one step higher for hard work than you would on Opus.
+Effort is relative to the model in use ("Current" names it): a stronger model needs less effort for the same job. Opus at medium does about what Sonnet does at high, and Fable (and Mythos, the same model) is stronger again. So for one and the same task pick one step lower on Opus than on Sonnet, and lower still on Fable or Mythos; on Sonnet, go one step higher for hard work than you would on Opus.
 
 Judge the SCOPE and the amount of work, not whether it is code. A short message can ask for a lot: "go through my whole drive and clean it up", "review the entire repo", "migrate everything" are big, multi-step, tool-heavy jobs where mistakes are costly: never low, usually high. Low is only for answers that need no tools and no planning.
 
@@ -372,7 +376,7 @@ If the person asks for deep thought ("think hard", "ultrathink", "be thorough"),
 
 If the message is a short follow-up to ongoing work ("yes", "go", "ok", "continue", or the same in any language), keep the current pair.
 
-Reply with JSON only: {"model":"haiku|sonnet|opus|fable","effort":"low|medium|high|xhigh|max","sure":0.0-1.0 how sure you are of the effort,"why":"at most 6 words, in the user's language"}`
+Reply with JSON only: {"model":"haiku|sonnet|opus|fable|mythos","effort":"low|medium|high|xhigh|max","sure":0.0-1.0 how sure you are of the effort,"why":"at most 6 words, in the user's language"}`
 
 /** Reads `{ model, effort, why }` out of a reply, or nothing when it doesn't hold one. */
 export function parseVerdict(text: string): { model: ModelKey; effort: Effort; why: string; sure?: number; handoff?: string } | undefined {
@@ -432,6 +436,7 @@ const JEV_MODELS: Record<ModelKey, string> = {
   sonnet: 'normal coding, edits across a few files, explanations, writing',
   opus: 'hard debugging, architecture, large refactors, careful reviews',
   fable: 'the hardest long-horizon or research-level work',
+  mythos: 'the same model as fable, for verified organizations: pick it only when the current model is mythos and fable would be picked',
 }
 const JEV_TASK =
   'Choose the reasoning effort (and model) an agentic assistant should use for the next user message. It reads files, ' +
@@ -614,7 +619,7 @@ export type JudgeConfig = {
   floor: Effort
   /** Auto never goes above this effort. */
   ceiling: Effort
-  /** On Fable, Auto never goes above this effort instead of the ceiling; same follows the ceiling. */
+  /** On Fable and Mythos, Auto never goes above this effort instead of the ceiling; same follows the ceiling. */
   fableCeiling: Effort | 'same'
   /** What the person switched off: the footer's handoff button and any of the alert bands. */
   hide: Hideable[]
@@ -1117,10 +1122,15 @@ async function typeCommand($: EngineInterface, text: string): Promise<boolean> {
   }
 }
 
+/** What /model is given for a model: its alias, or the full id for Mythos, which Claude Code has no alias for. */
+export function modelArg(model: ModelKey): string {
+  return model === 'mythos' ? (MODELS.find(m => m.key === model)?.id ?? model) : model
+}
+
 /** A model change reloads the context, so it only happens when the person says yes. */
 async function switchModel($: EngineInterface, model: ModelKey) {
   try {
-    await $.command.run({ command: 'model', args: model })
+    await $.command.run({ command: 'model', args: modelArg(model) })
     declined = null
     await update($, suggestion, () => null)
     const current = await read($, pick)
@@ -1396,12 +1406,12 @@ export function bounded(effort: Effort, floor: Effort, ceiling: Effort): Effort 
   return EFFORTS[Math.max(lo, Math.min(hi, EFFORTS.indexOf(effort)))]
 }
 
-/** The highest effort Auto picks on this model: Fable's own Max when one is set, else the Max for every model. */
+/** The highest effort Auto picks on this model: Fable's own Max (Mythos is the same model) when one is set, else the Max for every model. */
 export function ceilingFor(key: ModelKey | undefined, cfg: { ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
-  return key === 'fable' && cfg.fableCeiling !== 'same' ? cfg.fableCeiling : cfg.ceiling
+  return (key === 'fable' || key === 'mythos') && cfg.fableCeiling !== 'same' ? cfg.fableCeiling : cfg.ceiling
 }
 
-/** A helper's effort brought down to its model's Max (Fable's own on Fable). Unlike modelCapped, Max wins over Min
+/** A helper's effort brought down to its model's Max (Fable/Mythos max on Fable and Mythos). Unlike modelCapped, Max wins over Min
  * here, as helperFloor has it for helpers. */
 export function helperCapped(effort: Effort, modelId: string, cfg: { ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
   const hi = EFFORTS.indexOf(ceilingFor(keyOf(modelId), cfg))
@@ -1421,7 +1431,7 @@ export function loosestCeiling(cfg: { ceiling: Effort; fableCeiling: Effort | 's
   return cfg.fableCeiling !== 'same' && EFFORTS.indexOf(cfg.fableCeiling) > EFFORTS.indexOf(cfg.ceiling) ? cfg.fableCeiling : cfg.ceiling
 }
 
-/** An effort Auto picked, brought down to the Max of the model the request goes to (Fable's own Max on Fable), never
+/** An effort Auto picked, brought down to the Max of the model the request goes to (Fable/Mythos max on Fable and Mythos), never
  * below Min: as in bounded, Min wins over a lower Max. It only lowers, so a pick within the model's range passes. */
 export function modelCapped(effort: Effort, modelId: string, cfg: { floor: Effort; ceiling: Effort; fableCeiling: Effort | 'same' } = config): Effort {
   const hi = Math.max(EFFORTS.indexOf(cfg.floor), EFFORTS.indexOf(ceilingFor(keyOf(modelId), cfg)))
@@ -2272,7 +2282,7 @@ async function snap($: EngineInterface) {
   return { auto, autoModel, ...heldToModel(current, switchedNow, (auto && routed) || modelNow), judging, wanted, shownByApp, modelNow, pausedNow, cacheNow, compacting }
 }
 
-/** What the band shows: Auto's pick as it goes out on the chat's model, held to that model's Max (Fable's own on Fable).
+/** What the band shows: Auto's pick as it goes out on the chat's model, held to that model's Max (Fable/Mythos max on Fable and Mythos).
  * The pick itself keeps the judged level, so a later model or setting gets it back; each request is held as it goes. */
 export function heldToModel(current: Pick | null, switchedNow: { from: Effort; to: Effort; fromAuto?: boolean; toAuto?: boolean } | null, modelNow: ModelKey | null, cfg: { floor: Effort; ceiling: Effort; fableCeiling: Effort | 'same' } = config) {
   const id = MODELS.find(m => m.key === (modelNow ?? current?.model))?.id
@@ -2508,16 +2518,22 @@ const HANDOFF_POLL_MS = 1000
 let routed: ModelKey | null = null
 // Prompts left that stay on the chat's model, after a cheaper answer was redone.
 let stayUp = 0
-const MODEL_RANK: ModelKey[] = ['haiku', 'sonnet', 'opus', 'fable']
-/** The model a verdict sends this prompt to: a cheaper one than the chat's, or null for the chat's own. Never Fable. */
+const MODEL_RANK: ModelKey[] = ['haiku', 'sonnet', 'opus', 'fable', 'mythos']
+/** The model a verdict sends this prompt to: a cheaper one than the chat's, or null for the chat's own. Never Fable or Mythos. */
 export function routeTo(verdict: ModelKey, inUse: ModelKey): ModelKey | null {
-  if (verdict === 'fable') return null
+  if (verdict === 'fable' || verdict === 'mythos') return null
   return MODEL_RANK.indexOf(verdict) < MODEL_RANK.indexOf(inUse) ? verdict : null
 }
+/** The model a verdict suggests switching to. Mythos 5.2 is Fable 5.2 for organizations Anthropic has verified: a
+ *  verdict for either means the chat's own when the chat is on one of them, and Fable otherwise. */
+export function asOffered(verdict: ModelKey, inUse: ModelKey): ModelKey {
+  if (verdict !== 'fable' && verdict !== 'mythos') return verdict
+  return inUse === 'fable' || inUse === 'mythos' ? inUse : 'fable'
+}
 
-// What one input token costs on each model, in Sonnet's price: Opus about 2x (measured: the same prompt cost 1.97x on Opus), Haiku about a third. These are the ratios
+// What one input token costs on each model, in Sonnet's price: Opus about 2x (measured: the same prompt cost 1.97x on Opus), Haiku about a third, Fable and Mythos 4x ($8 against $2 a million input tokens). These are the ratios
 // the savings estimate uses; they only have to be right enough to tell which side of a switch is cheaper.
-export const MODEL_PRICE: Record<ModelKey, number> = { haiku: 1 / 3, sonnet: 1, opus: 2, fable: 5 }
+export const MODEL_PRICE: Record<ModelKey, number> = { haiku: 1 / 3, sonnet: 1, opus: 2, fable: 4, mythos: 4 }
 /**
  * Whether sending this one prompt to a cheaper model pays. The chat's context is read from the cache (a tenth of the input
  * price) where that model's cache is warm, and written to it (1.25 times) where it is cold. A switch to a cold model
@@ -3857,7 +3873,7 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
   }
   // The person sends /model, so the app's own control moves too; with a draft in the box the mod runs it.
   const changeModel = async (model: ModelKey) => {
-    if (await typeCommand($, `/model ${model}`)) return
+    if (await typeCommand($, `/model ${modelArg(model)}`)) return
     await switchModel($, model)
   }
   const acceptSuggestion = (model: ModelKey) => () => changeModel(model)
@@ -3895,7 +3911,8 @@ async function effortRows($: EngineInterface, e: RenderInput<'AbovePrompt'>, opt
           : 'Pick an effort'
   const modelRow = (
     <Box flexDirection="row" alignItems="center" gap={1}>
-      {MODELS.map(m =>
+      {/* Mythos only on a Mythos chat: it is open to verified organizations alone, so a button elsewhere could not switch. */}
+      {MODELS.filter(m => m.key !== 'mythos' || inUse === 'mythos').map(m =>
         m.key === inUse ? (
           <Button key={`m-${m.key}`} variant="primary" label={m.label} onPress={setModel(m.key)} />
         ) : (
@@ -4010,6 +4027,24 @@ async function helperEffortOf($: EngineInterface, id: string): Promise<Effort | 
   helperWaiting = helperWaiting.filter(w => w !== match)
   helperPicks.set(id, match.effort)
   return match.effort
+}
+
+// The effort each subagent was given of its own, as $.agent.list() reports it (null: it takes the session's); kept once known.
+const ownEffort = new Map<string, string | null>()
+/** The effort set for this subagent (the Agent call's or its definition's), null when it takes the session's, or
+ *  undefined while it is not listed yet (steered as before, and asked again on its next request). */
+async function ownEffortOf($: EngineInterface, id: string): Promise<string | null | undefined> {
+  const known = ownEffort.get(id)
+  if (known !== undefined) return known
+  const info = (await $.agent.list().catch(() => [])).find(a => a.id === id)
+  if (!info) return undefined
+  const own = info.effort === undefined ? null : String(info.effort)
+  ownEffort.set(id, own)
+  return own
+}
+/** Whether this subagent runs at an effort set for it, not the session's. */
+async function setsOwnEffort($: EngineInterface, id: string): Promise<boolean> {
+  return typeof (await ownEffortOf($, id)) === 'string'
 }
 
 /** Counts one request of a helper the judge steered, for /effortless stats. */
@@ -4556,10 +4591,11 @@ Saved to ${out}.md and .json` }
             $.ui.invalidate('ui.render')
           }
         }
-        if (wantsModel && verdict.model !== inUse && verdict.model !== declined) {
-          await update($, suggestion, () => verdict.model)
-          $.ui.toast(`Suggestion: switch to ${verdict.model}? /effortless switch or /effortless keep`)
-        } else if (verdict.model === inUse) {
+        const offered = asOffered(verdict.model, inUse)
+        if (wantsModel && offered !== inUse && offered !== declined) {
+          await update($, suggestion, () => offered)
+          $.ui.toast(`Suggestion: switch to ${offered}? /effortless switch or /effortless keep`)
+        } else if (offered === inUse) {
           await update($, suggestion, () => null)
         }
       }
@@ -4625,6 +4661,12 @@ Saved to ${out}.md and .json` }
       return result
     }
     // A helper the judge picked an effort for at its spawn runs every request at it. Haiku takes no effort.
+    // A subagent given its own effort (the Agent call's or its definition's) keeps it: a level asked for on purpose, such
+    // as a review's, is not Auto's to change.
+    if (e.agentId !== undefined && (await setsOwnEffort($, e.agentId))) {
+      if (e.index === 0) void proof($, `subagent ${e.agentId} (${e.model}): effort ${e.effort ?? 'none'}, its own`)
+      return yield* send(e)
+    }
     if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string' && keyOf(e.model) !== 'haiku') {
       const chosen = await helperEffortOf($, e.agentId)
       const effort = chosen && helperCapped(chosen, e.model)
@@ -4642,8 +4684,8 @@ Saved to ${out}.md and .json` }
     // with the app already on the effort they want, the mod would never see a change to give way to.
     if (p.by !== 'manual' && !(await read($, isAuto))) return yield* send(e)
     // A subagent of a turn Auto picked for (Helpers off, or no verdict for it) runs at that turn's effort, no extra
-    // judge call, but never below medium: a helper's answer goes back unchecked (see helperFloor). A subagent whose
-    // definition sets its own effort cannot be told apart from one that inherits it, so it follows the turn too.
+    // judge call, but never below medium: a helper's answer goes back unchecked (see helperFloor). One with an effort of
+    // its own was sent as it is above.
     if (e.agentId !== undefined) {
       if (p.by === 'manual') return yield* send(e)
       const floor = helperFloor(config.floor, ceilingFor(keyOf(e.model)))
@@ -4697,7 +4739,7 @@ Saved to ${out}.md and .json` }
         {/* Hovering the level puts a box behind it, like the app's own effort pill. The spaces are its padding:
             Text has no padding of its own. */}
         {v.auto && v.pausedNow ? (
-          // Models not listed in cacheSafe (Fable 5.1 and older): Auto waits, as an effort change may rewrite the cache.
+          // Models not listed in cacheSafe (such as Fable 5.1 and older): Auto waits, as an effort change may rewrite the cache.
           <Text dimColor hover={{ scope: 'effort', backgroundColor: HOVER_BOX }}>
             {' Paused '}
           </Text>
@@ -4780,8 +4822,13 @@ Saved to ${out}.md and .json` }
     const waiting = helper ? { description: e.description, type: e.subagentType, parentId: e.parentAgentId, effort: helper.effort } : null
     if (waiting) helperWaiting = [...helperWaiting, waiting].slice(-20)
     const result = await next(e)
+    // One given an effort of its own keeps it (see turn.step): the judged level is neither counted nor shown for it.
+    const own = 'agentId' in result && result.agentId ? await ownEffortOf($, result.agentId) : undefined
     let shownHelper: Effort | undefined
-    if (waiting) {
+    if (waiting && typeof own === 'string') {
+      helperWaiting = helperWaiting.filter(w => w !== waiting)
+      void proof($, `helper ${e.subagentType} "${e.description}": its own effort ${own}`)
+    } else if (waiting) {
       helperWaiting = helperWaiting.filter(w => w !== waiting)
       // helperPicks keeps the judged level, whichever way the first request came; each request is held to its model's Max
       // as it goes out. Counted and shown here at the Max of the model the helper starts on.
@@ -4800,7 +4847,10 @@ Saved to ${out}.md and .json` }
     const id = result.agentId
     const now = await $.clock.now()
     const rec: AgentRec = { id, type: e.fork ? 'fork' : e.subagentType, task: e.description, state: 'running', startedAt: now, model: result.model }
-    if (helper) {
+    if (typeof own === 'string') {
+      rec.effort = (EFFORT_LABELS as Record<string, string>)[own] ?? own
+      rec.why = 'its own effort'
+    } else if (helper) {
       rec.effort = EFFORT_LABELS[shownHelper ?? helper.effort]
       // Held below the judged level by its model's Max: the reason says so, not that helpers start at medium.
       rec.why = shownHelper && shownHelper !== helper.effort ? `${helper.why.replace(' (helpers start at medium)', '')} (this model's Max)` : helper.why
@@ -4992,7 +5042,7 @@ Saved to ${out}.md and .json` }
       const hidden = (draft.hide ?? config.hide.join(',')).split(',').filter(Boolean)
       const judgeName = shown.judge === 'haiku' ? 'Haiku' : hasKey || shown.judge === 'jev' ? 'Haiku + Jev' : 'Haiku'
       const summaries: Record<SettingsCard, string> = {
-        effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.fableCeiling !== 'same' ? ` · Fable to ${EFFORTS[Math.max(EFFORTS.indexOf(shown.floor), EFFORTS.indexOf(shown.fableCeiling))]}` : ''}${shown.helpers === 'on' ? ' · helpers' : ''}`,
+        effort: `${BIAS_WORDS[shown.bias + 2]} · ${shown.floor} to ${shown.ceiling}${shown.fableCeiling !== 'same' ? ` · Fable/Mythos to ${EFFORTS[Math.max(EFFORTS.indexOf(shown.floor), EFFORTS.indexOf(shown.fableCeiling))]}` : ''}${shown.helpers === 'on' ? ' · helpers' : ''}`,
         model: shown.modelAuto === 'on' ? 'Cheaper when it can' : "Always the chat's",
         judge: tested && tested.ok !== null ? `${judgeName} · ${tested.ok ? 'working' : 'failing'}` : judgeName,
         handoff: `${shown.handoffSkill ? `/${shown.handoffSkill}` : 'Built in'} · compact alert at ${shown.swampAt}%`,
@@ -5211,8 +5261,8 @@ Saved to ${out}.md and .json` }
                   <Box key="gap" width={2} />,
                   pick({ key: "settings-floor", label: "Min", value: shown.floor, options: opts(EFFORTS), onSelect: set('floor') }),
                   pick({ key: "settings-ceiling", label: "Max", value: shown.ceiling, options: opts(EFFORTS), onSelect: set('ceiling') }),
-                  // Fable's own Max: same follows the Max above; a level caps Auto on Fable alone.
-                  pick({ key: "settings-fable-ceiling", label: "Fable max", value: shown.fableCeiling, options: [{ value: 'same', label: 'same as Max' }, ...opts(EFFORTS)], onSelect: set('fableCeiling'), row: true }),
+                  // Fable's own Max (Mythos is the same model): same follows the Max above; a level caps Auto on Fable and Mythos alone.
+                  pick({ key: "settings-fable-ceiling", label: "Fable/Mythos max", value: shown.fableCeiling, options: [{ value: 'same', label: 'same as Max' }, ...opts(EFFORTS)], onSelect: set('fableCeiling'), row: true }),
                   // Effort for helpers on a row of its own: the dashboard's Auto switch exactly (switch, word, slide,
                   // one blank button laid over both), then what it does now.
                   <Box key="settings-helpers-row" width="100%" flexDirection="row" alignItems="center" gap={1}>

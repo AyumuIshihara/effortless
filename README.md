@@ -106,8 +106,8 @@ new version in the chat you pressed it in, with nothing to type.
 | **Compact** | compacts the chat. It turns into a glowing **Handoff** when Haiku says a fresh chat would pay off, with Compact as quiet text beside it. Set Settings → Handoff → Handoff button to **Always** to keep Handoff on the bar |
 | **⚙** | settings |
 
-Settings → Effort sets the range Auto picks within: **Min** and **Max** for every model, and **Fable max**, a Max for
-Fable alone (**same as Max** by default). As with Max, a higher Min wins, except for a subagent whose effort Auto judges on its own (Helpers on), where Max wins as it always has. A level you name in the prompt ("max effort") runs past both.
+Settings → Effort sets the range Auto picks within: **Min** and **Max** for every model, and **Fable/Mythos max**, a Max for
+Fable and Mythos alone (**same as Max** by default; Mythos 5.2 is the same model as Fable 5.2, so one setting covers both). As with Max, a higher Min wins, except for a subagent whose effort Auto judges on its own (Helpers on), where Max wins as it always has. A level you name in the prompt ("max effort") runs past both.
 
 Prefer it quiet? Settings → Customize has a **Minimal** look with no bar. It also sets the **Appearance** (match Claude Code, dark or light) and the **Theme** (violet, Claude orange or cherry blossom).
 
@@ -212,7 +212,9 @@ What this does and does not show:
 
 ## Models
 
-Effort only changes on Opus 5.5, Sonnet 5.5 and Fable 5.2. On other models Auto pauses and the footer says `Paused`: on older models a change of effort between requests rewrote most of the prompt cache, which costs more than it saves. Haiku takes no effort setting.
+Effort only changes on Opus 5.5, Sonnet 5.5, Fable 5.2 and Mythos 5.2. On other models Auto pauses and the footer says `Paused`: on older models a change of effort between requests rewrote most of the prompt cache, which costs more than it saves. Haiku takes no effort setting.
+
+Mythos 5.2 is the same model as Fable 5.2, open to organizations Anthropic has verified. Its Max is the Fable/Mythos max above and a prompt is never moved to it. A suggestion never switches between Fable and Mythos; where the chat is on another model and the judge names Mythos, it offers Fable. The model row shows a Mythos button only on a Mythos chat, and it runs `/model claude-mythos-5-2`, as Claude Code has no alias for it. A subagent given an effort of its own (the Agent call's or its definition's) keeps that effort on every model. A measurement on Claude Code 2.1.330 (2026-11-23) read the same cache after low → high and high → low as with an unchanged effort.
 
 Fable 5.2 was added in this fork. Claude Code's [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) say a change of effort keeps the cache on Fable 5.1 and later, and a measurement on Claude Code 2.1.321 (2026-11-10) read the same cache after low → high and high → low as with an unchanged effort. Fable 5.1 keeps it only from Claude Code 2.1.260, and effortless does not read Claude Code's version, so Auto still pauses there. The docs also say that on Amazon Bedrock, Google Cloud's Agent Platform, a Claude apps gateway, with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` set or in a HIPAA organisation, a change of effort rewrites the cache on every model; effortless does not detect these, as before for Opus and Sonnet.
 

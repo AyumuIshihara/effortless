@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntryKeys, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
+import { routeTo, asOffered, modelArg, MODEL_PRICE, helperFloor, namedEffort, hotVisible,looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntryKeys, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -331,6 +331,16 @@ describe('manual effort', () => {
 })
 
 describe('model in use', () => {
+  test('a Mythos chat shows a Mythos button among the models', { options: { modelAuto: 'off' } } as never, async ($, on) => {
+    engine(on, {}, 'claude-mythos-5-2')
+    judgeSays(on, '{"model":"mythos","effort":"high","why":"x"}')
+    await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'terminal', ...BAND })
+    await ui.redraw()
+    expect((await ui.find({ key: 'm-mythos' }))?.text).toContain('Mythos')
+    expect((await ui.find({ key: 'm-fable' }))?.text).toContain('Fable')
+  })
+
   test('a switch in the app moves the band, and effort applies to the new model at once', { options: { modelAuto: 'off' } } as never, async ($, on) => {
     engine(on)
     judgeSays(on, '{"model":"haiku","effort":"low","why":"kort"}')
@@ -350,6 +360,8 @@ describe('model in use', () => {
     await switchTo('claude-haiku-5-5', 'claude-opus-5-5')
     await ui.redraw()
     expect((await ui.find({ key: 'm-opus' }))?.text).toContain('Opus')
+    // Mythos is offered only on a Mythos chat.
+    expect(await ui.find({ key: 'm-mythos' })).toBeUndefined()
 
     await step($, 'medium')
     expect(sent[0]).toEqual({ model: 'claude-opus-5-5', effort: 'low' })
@@ -680,7 +692,7 @@ describe('footer text', () => {
 })
 
 describe('helpers', () => {
-  test('cacheSafe: effort may change on Opus 5.5, Sonnet 5.5 and Fable 5.2 only', () => {
+  test('cacheSafe: effort may change on Opus 5.5, Sonnet 5.5, Fable 5.2 and Mythos 5.2 only', () => {
     expect(cacheSafe('claude-opus-5-5')).toBe(true)
     expect(cacheSafe('claude-sonnet-5-5[1m]')).toBe(true)
     expect(cacheSafe('claude-fable-5-2')).toBe(true)
@@ -689,6 +701,11 @@ describe('helpers', () => {
     expect(cacheSafe('claude-fable-5')).toBe(false)
     expect(cacheSafe('claude-fable-5-20260101')).toBe(false)
     expect(cacheSafe('claude-fable-5-2-20261101')).toBe(true)
+    // Mythos 5.2 measured on Claude Code 2.1.330; the earlier Mythos was not.
+    expect(cacheSafe('claude-mythos-5-2')).toBe(true)
+    expect(cacheSafe('claude-mythos-5-2[1m]')).toBe(true)
+    expect(cacheSafe('claude-mythos-5-1')).toBe(false)
+    expect(cacheSafe('claude-mythos-5-20')).toBe(false)
     expect(cacheSafe('claude-opus-4-8')).toBe(false)
     expect(cacheSafe('claude-opus-5')).toBe(false)
   })
@@ -1034,6 +1051,45 @@ describe('cache guard', () => {
     expect(helperCapped('high', 'claude-opus-5-5', { ceiling: 'max', fableCeiling: 'low' })).toBe('high')
   })
 
+  test('Mythos 5.2 is the same model as Fable 5.2: it keeps to Fable max and is never routed to', () => {
+    const cfg = { floor: 'low', ceiling: 'max', fableCeiling: 'high' } as const
+    expect(ceilingFor('mythos', cfg)).toBe('high')
+    expect(ceilingFor('mythos', { ceiling: 'xhigh', fableCeiling: 'same' })).toBe('xhigh')
+    expect(modelCapped('max', 'claude-mythos-5-2', cfg)).toBe('high')
+    expect(modelCapped('max', 'claude-mythos-5-2[1m]', cfg)).toBe('high')
+    expect(modelCapped('medium', 'claude-mythos-5-2', cfg)).toBe('medium')
+    expect(modelCapped('max', 'claude-mythos-5-2', { floor: 'xhigh', ceiling: 'max', fableCeiling: 'low' })).toBe('xhigh')
+    expect(helperCapped('high', 'claude-mythos-5-2', { ceiling: 'max', fableCeiling: 'low' })).toBe('low')
+    const opts = { floor: 'low', ceiling: 'max', fableCeiling: 'medium' } as const
+    const p = { model: 'mythos', effort: 'xhigh', why: 'hard', by: 'haiku' } as const
+    expect(heldToModel(p, null, 'mythos', opts).current).toMatchObject({ effort: 'medium', why: 'your settings' })
+    expect(heldToModel(p, null, 'opus', opts).current).toMatchObject({ effort: 'xhigh', why: 'hard' })
+    // A verdict of Fable or Mythos never moves the prompt; a cheaper verdict can leave a Mythos chat, like a Fable one.
+    expect(routeTo('mythos', 'mythos')).toBeNull()
+    expect(routeTo('mythos', 'sonnet')).toBeNull()
+    expect(routeTo('fable', 'mythos')).toBeNull()
+    expect(routeTo('sonnet', 'mythos')).toBe('sonnet')
+    expect(routeTo('sonnet', 'fable')).toBe('sonnet')
+    expect(routeTo('opus', 'mythos')).toBe('opus')
+    expect(routeTo('sonnet', 'opus')).toBe('sonnet')
+    expect(MODEL_PRICE.mythos).toBe(MODEL_PRICE.fable)
+    // A suggestion never swaps Fable and Mythos, and offers Fable where the chat is on neither (Mythos needs a verified organization).
+    expect(asOffered('mythos', 'fable')).toBe('fable')
+    expect(asOffered('fable', 'mythos')).toBe('mythos')
+    expect(asOffered('mythos', 'mythos')).toBe('mythos')
+    expect(asOffered('mythos', 'opus')).toBe('fable')
+    expect(asOffered('fable', 'opus')).toBe('fable')
+    expect(asOffered('sonnet', 'mythos')).toBe('sonnet')
+    // Claude Code has no alias for Mythos: /model is given its full id.
+    expect(modelArg('mythos')).toBe('claude-mythos-5-2')
+    expect(modelArg('fable')).toBe('fable')
+    expect(modelArg('sonnet')).toBe('sonnet')
+    // The judge's answers name it.
+    expect(parseVerdict('{"model":"mythos","effort":"high","why":"x"}')?.model).toBe('mythos')
+    expect(parseVerdict('{"model":"claude-mythos-5-2","effort":"high","why":"x"}')?.model).toBe('mythos')
+    expect(parseJevAnswer(jevReply('high', 0.9, 'mythos'), null)?.model).toBe('mythos')
+  })
+
   test('on Fable 5.2 Auto stays within Fable max; Opus keeps the Max for every model', { options: { fableEffortCeiling: 'high' } } as never, async ($, on) => {
     engine(on, {}, 'claude-fable-5-2')
     judgeSays(on, '{"model":"fable","effort":"max","why":"x"}')
@@ -1047,6 +1103,17 @@ describe('cache guard', () => {
       // drain
     }
     expect(sent.map(s => s.effort)).toEqual(['high', 'high'])
+  })
+
+  test('on Mythos 5.2 Auto runs and stays within Fable max', { options: { fableEffortCeiling: 'high' } } as never, async ($, on) => {
+    engine(on, {}, 'claude-mythos-5-2')
+    judgeSays(on, '{"model":"mythos","effort":"max","why":"x"}')
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'hard task', wait: false, origin: { kind: 'composer' } })
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-mythos-5-2', effort: 'xhigh', messageCount: 1 })) {
+      // drain
+    }
+    expect(sent.map(s => s.effort)).toEqual(['high'])
   })
 
   test('switching the chat to Fable holds Auto\s pick to Fable max on the band too', { options: { fableEffortCeiling: 'medium' } } as never, async ($, on) => {
@@ -4597,6 +4664,68 @@ describe('agent panel', () => {
     await start($, on)
     await $.agent.spawn({ prompt: 'list the files under hooks', description: 'find files', subagentType: 'Explore' } as never)
     expect(sent.map(s => s.effort)).toEqual(['medium'])
+  })
+
+  test('with Helpers on, a subagent given its own effort keeps it; one without is judged', { options: { helpers: 'on' } } as never, async ($, on) => {
+    judgeSays(on, '{"model":"opus","effort":"low","why":"quick search"}')
+    let spawned = 0
+    on('agent.spawn', () => ({ agentId: `r${++spawned}`, model: 'claude-opus-5-5' }) as never)
+    on('agent.list', () => ({ value: [
+      { id: 'r1', description: 'review', type: 'general-purpose', status: 'running', effort: 'xhigh' },
+      { id: 'r2', description: 'find files', type: 'Explore', status: 'running' },
+    ] }) as never)
+    on('turn.complete', () => ({ text: '' }))
+    const sent = recordSteps(on)
+    await start($, on)
+    await $.agent.spawn({ prompt: 'review the whole diff', description: 'review', subagentType: 'general-purpose' } as never)
+    await $.agent.spawn({ prompt: 'list the files under hooks', description: 'find files', subagentType: 'Explore' } as never)
+    for (const agentId of ['r1', 'r1', 'r2']) {
+      for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: agentId === 'r1' ? 'xhigh' : 'high', messageCount: 1, agentId } as never)) {
+        // drain
+      }
+    }
+    expect(sent.map(s => s.effort)).toEqual(['xhigh', 'xhigh', 'medium'])
+    // The panel shows the effort it keeps, not the judged one.
+    await $.command.run({ command: 'effortless', args: 'agents' })
+    const pane = await $.ui.mount(PANE)
+    await pane.press({ key: 'agent-r1-press' }).catch(() => undefined)
+    expect(await drawn(pane)).toContain('its own effort')
+    expect(await drawn(pane)).toContain('XHigh')
+    expect(await drawn(pane)).not.toContain('quick search')
+    await pane.unmount()
+  })
+
+  test('a subagent not listed yet is steered as before, and its effort of its own is asked for again', async ($, on) => {
+    engine(on)
+    judgeSays(on, '{"model":"opus","effort":"xhigh","why":"hard"}')
+    let listed = false
+    on('agent.list', () => ({ value: listed ? [{ id: 'u1', description: 'review', type: 'general-purpose', status: 'running', effort: 'low' }] : [] }) as never)
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'find why the relay drops messages', wait: false, origin: { kind: 'composer' } })
+    await step($, 'medium')
+    for (const index of [0, 1]) {
+      for await (const _ of $.turn.step({ turnId: 't1', index, model: 'claude-opus-5-5', effort: 'low', messageCount: 1, agentId: 'u1' } as never)) {
+        // drain
+      }
+      listed = true
+    }
+    // Not listed at its first request: the turn's effort. Listed at the next: its own.
+    expect(sent.map(s => s.effort)).toEqual(['xhigh', 'xhigh', 'low'])
+  })
+
+  test('with Helpers off, a subagent given its own effort keeps it instead of the turn\'s', async ($, on) => {
+    engine(on)
+    judgeSays(on, '{"model":"opus","effort":"high","why":"hard"}')
+    on('agent.spawn', () => ({ agentId: 's1', model: 'claude-opus-5-5' }) as never)
+    on('agent.list', () => ({ value: [{ id: 's1', description: 'review', type: 'general-purpose', status: 'running', effort: 'low' }] }) as never)
+    const sent = recordSteps(on)
+    await $.prompt.submit({ text: 'find why the relay drops messages', wait: false, origin: { kind: 'composer' } })
+    await step($, 'medium')
+    await $.agent.spawn({ prompt: 'review the diff', description: 'review', subagentType: 'general-purpose' } as never)
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'low', messageCount: 1, agentId: 's1' } as never)) {
+      // drain
+    }
+    expect(sent.map(s => s.effort)).toEqual(['high', 'low'])
   })
 
   test("helperFloor: medium, the person's Min when higher, never above their Max", () => {
