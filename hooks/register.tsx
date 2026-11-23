@@ -157,6 +157,7 @@ const cardRunning = (kind: HandoffCard['kind']) => kind === 'writing' || kind ==
 const cardLanded = (kind: HandoffCard['kind']) => kind === 'done' || kind === 'compacted'
 const handoffCard = atom({ plugin: 'effortless', key: 'handoffCard' } as const, null)
 const updateCard = atom({ plugin: 'effortless', key: 'updateCard' } as const, null)
+const startRoot = atom({ plugin: 'effortless', key: 'startRoot' } as const, null)
 const HANDOFF_CARD_MS = 2 * 60_000
 // The handoff card's art while it is written: sparkles carried from left to right.
 const HANDOFF_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="64" viewBox="0 0 360 30" preserveAspectRatio="xMaxYMid slice"><style>:root{color-scheme:light dark}html,body{margin:0}svg{background:transparent;display:block}.d{fill:#d9d1ff;opacity:0;animation-name:go;animation-timing-function:ease-in-out;animation-iteration-count:infinite}@keyframes go{0%{opacity:0;transform:translate(0,0)}15%{opacity:.9}85%{opacity:.7}100%{opacity:0;transform:translate(190px,0)}}.br{animation:br 2.4s ease-in-out infinite}@keyframes br{0%,100%{opacity:.75}50%{opacity:1}}</style><defs><linearGradient id="bg" x1="0" x2="1"><stop offset=".43" stop-color="#7c6cf0" stop-opacity="0"/><stop offset=".7" stop-color="#7c6cf0" stop-opacity=".2"/><stop offset="1" stop-color="#b3a6ff" stop-opacity=".46"/></linearGradient><linearGradient id="fade" x1="0" x2="1"><stop offset=".43" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="1"/></linearGradient><mask id="m"><rect width="360" height="30" fill="url(#fade)"/></mask><pattern id="grain" width="2" height="2" patternUnits="userSpaceOnUse"><rect width=".6" height=".6" fill="#fff" fill-opacity=".07"/></pattern></defs><g mask="url(#m)"><rect class="br" width="360" height="30" fill="url(#bg)"/><circle class="d" cx="170" cy="9.2" r="0.83" style="animation-duration:2.7s;animation-delay:-2.2s"/><circle class="d" cx="170" cy="17.8" r="0.54" style="animation-duration:2.2s;animation-delay:-3.0s"/><circle class="d" cx="170" cy="9.7" r="0.64" style="animation-duration:3.6s;animation-delay:-1.7s"/><circle class="d" cx="170" cy="22.4" r="0.79" style="animation-duration:3.1s;animation-delay:-0.5s"/><circle class="d" cx="170" cy="18.0" r="1.02" style="animation-duration:2.9s;animation-delay:-2.7s"/><circle class="d" cx="170" cy="18.8" r="0.54" style="animation-duration:3.3s;animation-delay:-2.1s"/><circle class="d" cx="170" cy="10.6" r="0.52" style="animation-duration:3.4s;animation-delay:-1.7s"/><circle class="d" cx="170" cy="19.8" r="1.03" style="animation-duration:3.2s;animation-delay:-3.3s"/><circle class="d" cx="170" cy="12.7" r="0.98" style="animation-duration:2.8s;animation-delay:-3.4s"/><circle class="d" cx="170" cy="23.3" r="0.56" style="animation-duration:2.4s;animation-delay:-0.8s"/><circle class="d" cx="170" cy="25.2" r="0.76" style="animation-duration:3.1s;animation-delay:-1.1s"/><circle class="d" cx="170" cy="15.2" r="0.73" style="animation-duration:2.7s;animation-delay:-2.1s"/><circle class="d" cx="170" cy="16.9" r="1.04" style="animation-duration:3.2s;animation-delay:-3.3s"/><circle class="d" cx="170" cy="22.8" r="1.09" style="animation-duration:3.1s;animation-delay:-0.6s"/><rect width="360" height="30" fill="url(#grain)"/></g></svg>`
@@ -2934,9 +2935,11 @@ async function versionAt($: EngineInterface, root: string): Promise<string | und
   }
 }
 const installedVersion = ($: EngineInterface) => versionAt($, $.plugin.root)
-/** Looks for a newer version and offers it, unless ✕ put that version away less than UPDATE_SNOOZE_MS ago. */
 // What the last check found, for /effortless update to say (installed, git, web, marketplace).
 let lastUpdateCheck = 'not checked yet'
+// The version the last look took as installed, and the one this chat runs: they differ where an update for this chat
+// was held back from its folder.
+let lastLook: { installed?: string; running?: string } = {}
 /** public.json as it is on RELEASE_BRANCH, read with git: a depth-1 fetch without large files into a small repo of its own, then
  * the one file. Git has no cache in the way, unlike the host's web fetch, and works on the dev channel too. */
 async function latestFromGit($: EngineInterface): Promise<{ release?: { version: string; note: string }; why: string }> {
@@ -3055,13 +3058,13 @@ async function afterLoad($: EngineInterface) {
   startTimers($, 'draw')
   const updatedTo = (await $.store.get('updatedTo').catch(() => null)) as { version: string; note: string; at: number } | null
   // A "Loading it…" left by the copy before this load is over either way.
-  await update($, updateCard, c => (c && c.detail === UPDATE_LOADING ? { ...c, detail: 'Installed. Open a new chat to load it.' } : c))
+  await update($, updateCard, c => (c && c.detail === UPDATE_LOADING ? { ...c, detail: NEW_CHAT } : c))
   if (updatedTo) {
     await $.store.set('updatedTo', null)
     // The reload brought back older code (the chat's folder was not refreshed): the old code's timer died with the
     // reload, so the card would say "Loading it…" for good. Say what to do instead.
     const loaded = (await installedVersion($)) === updatedTo.version
-    await update($, updateCard, () => ({ stage: 'done', version: updatedTo.version, note: updatedTo.note, at: Date.now(), ...(loaded ? {} : { detail: 'Installed. Open a new chat to load it.' }) }))
+    await update($, updateCard, () => ({ stage: 'done', version: updatedTo.version, note: updatedTo.note, at: Date.now(), ...(loaded ? {} : { detail: NEW_CHAT }) }))
   }
   await checkUpdate($)
 }
@@ -3084,6 +3087,7 @@ async function checkUpdate($: EngineInterface): Promise<UpdateFound> {
   }
   return outcome.found
 }
+/** Looks for a newer version and offers it, unless ✕ put that version away less than UPDATE_SNOOZE_MS ago. */
 async function checkUpdateLook($: EngineInterface, outcome: UpdateOutcome) {
   const shown = await read($, updateCard)
   if (shown && shown.stage !== 'offer') {
@@ -3092,12 +3096,18 @@ async function checkUpdateLook($: EngineInterface, outcome: UpdateOutcome) {
     outcome.ok = true
     return
   }
+  lastLook = {}
   const { latest, how, via, fresh } = await latestAvailable($)
   // No way gave a version: the marketplace copy is the last one tried.
   outcome.via = via ?? 'marketplace'
   outcome.ok = latest !== undefined
-  const mine = await installedVersion($)
-  lastUpdateCheck = `installed ${mine ?? 'unreadable'}; ${how}`
+  // A chat whose new version was installed but not copied into its folder still runs the old one: the version installed
+  // for it is the one that counts, so it is not offered again.
+  const running = await installedVersion($)
+  const kept = updatedFor(await keptUpdated($), $.plugin.root, await chatRoot($))
+  const mine = kept && (!running || isNewer(kept.version, running)) ? kept.version : running
+  lastLook = { installed: mine, running }
+  lastUpdateCheck = `installed ${mine ?? 'unreadable'}${mine !== running ? `; this chat runs ${running ?? 'an unreadable version'}: open a new chat` : ''}; ${how}`
   if (!latest || !mine || !isNewer(latest.version, mine)) {
     // Up to date only when both versions were read and the newest came from a source just reached.
     outcome.found = latest && mine && fresh ? 'newest' : 'unknown'
@@ -3120,6 +3130,14 @@ async function checkUpdateLook($: EngineInterface, outcome: UpdateOutcome) {
 }
 // The Settings header's "Check for updates": idle, checking, up to date, or the version found (then the button installs it).
 const updateCheck = atom({ plugin: 'effortless', key: 'updateCheck' } as const, 'idle')
+/** After a look that cleared the cards: where the version installed for this chat was held back from its folder, the card
+ * that says to open a new chat comes back. */
+async function showHeldBack($: EngineInterface, found: UpdateFound) {
+  const installed = lastLook.installed
+  if (found !== 'newest' || !installed || installed === lastLook.running) return
+  const now = await $.clock.now()
+  await update($, updateCard, c => c ?? { stage: 'done', version: installed, note: '', at: now, detail: NEW_CHAT })
+}
 /** Looks now, ignoring a Later pressed earlier (asking is a decision to look), and says what it found in the button. */
 async function checkUpdateNow($: EngineInterface) {
   await update($, updateCheck, () => 'checking')
@@ -3131,6 +3149,7 @@ async function checkUpdateNow($: EngineInterface) {
     lastUpdateCheck = `check failed: ${String(error).slice(0, 120)}`
     return 'unknown'
   })
+  await showHeldBack($, found)
   const card = await read($, updateCard)
   // An update on its way, or one that ended while this looked (a done card, cleared before the look): the card above the
   // prompt says so, and the button goes back to itself.
@@ -3183,10 +3202,12 @@ async function runClaude($: EngineInterface, args: string[], opts: Parameters<En
   }
   throw last
 }
-/** Update pressed: the marketplace and the plugin are updated as `claude plugin` does, then the plugins reloaded so
- * the new version runs in this chat. The new module shows "Updated" (see session.start). */
 /** Whether an update runs in this module: a second press, command or look while one runs starts nothing. */
 let updateRunning = false
+/** Update pressed: the marketplace and the plugin are updated as `claude plugin` does, then the plugins reloaded so
+ * the new version runs in this chat (the new module shows "Updated", see afterLoad). Where the new files are held back
+ * from the folder this chat runs from (another install uses it), nothing is reloaded and the card says to open a new
+ * chat. */
 async function runUpdate($: EngineInterface, card: UpdateCard) {
   if (updateRunning) return
   updateRunning = true
@@ -3204,6 +3225,7 @@ async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
   }
   let installed: string | undefined
   let got: string | undefined
+  let mayCopy = false
   try {
     // This chat's install, before the update moves it: the CLI updates one scope (and project), and other scopes keep
     // their own folders and versions. Its scope is named, and a project's own scope updated from that project, so the
@@ -3229,6 +3251,14 @@ async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
     }
     if (!installed)
       throw new Error(folders.length ? `claude plugin update finished, but ${got ?? 'an unreadable version'} is installed, not ${card.version}.` : `claude plugin update finished, but which install it updated could not be read.`)
+    mayCopy = mayCopyIntoRunning(after ?? [], entryKey(own), $.plugin.root)
+    // The next Update or Uninstall in a chat of this project runs from the same folder, which this entry no longer
+    // names: it is kept for that one, with the version it put in.
+    const root = await chatRoot($)
+    if (root && got) {
+      const entry: UpdatedEntry = { running: $.plugin.root, root, key: entryKey(own), version: got }
+      await $.store.set('updatedEntries', withUpdated(await keptUpdated($), entry)).catch(() => undefined)
+    }
   } catch (error) {
     const message = String(error instanceof Error ? error.message : error)
     // No CLI anywhere (a desktop-only install): say what to install, not the engine's ENOENT.
@@ -3237,11 +3267,18 @@ async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
     return
   }
   // The desktop app keeps this chat on the folder it started with, and a reload reads that folder again: so the new
-  // version's files go into it, or the reload would bring back the old code.
-  await syncRunningCopy($, installed).catch(() => undefined)
+  // version's files go into it, or the reload would bring back the old code. Not where another install still uses that
+  // folder: then nothing is reloaded, and the card says to open a new chat.
+  if (mayCopy) await syncRunningCopy($, installed).catch(() => undefined)
   const now = await $.clock.now()
   // The version that went in, which may be newer than the one offered.
   const done = { ...card, version: got ?? card.version }
+  // Not copied into the running folder of a cache install: a reload would only load the old code again. Nor is the
+  // version left for the next load to call Updated: that load may be a chat of the other install, which did not change.
+  if (skipsReload(mayCopy, $.plugin.root, installed)) {
+    await update($, updateCard, () => ({ ...done, stage: 'done', at: now, detail: NEW_CHAT }))
+    return
+  }
   await $.store.set('updatedTo', { version: done.version, note: done.note, at: now })
   // Installed, not yet running: only the new code, once loaded, says "Loaded in this chat" (afterLoad).
   await update($, updateCard, () => ({ ...done, stage: 'done', at: now, detail: UPDATE_LOADING }))
@@ -3250,14 +3287,19 @@ async function runUpdateOnce($: EngineInterface, card: UpdateCard) {
   if (!reloaded && (await typeCommand($, `/reload-plugins ${RELOAD_ARGS}`)))
     await update($, updateCard, c => (c ? { ...c, detail: 'Press Enter to load it' } : c))
   // Still this code's words after a while: the reload did not load the new version, so a new chat has to.
-  $.clock.after(UPDATE_LOAD_WAIT_MS, () => void update($, updateCard, c => (c && c.at === now && c.detail === UPDATE_LOADING ? { ...c, detail: 'Installed. Open a new chat to load it.' } : c)))
+  $.clock.after(UPDATE_LOAD_WAIT_MS, () => void update($, updateCard, c => (c && c.at === now && c.detail === UPDATE_LOADING ? { ...c, detail: NEW_CHAT } : c)))
+}
+/** Whether a done update skips the reload: its files were held back from the running folder, a cache folder they would
+ * have been copied into, so the reload would bring back the old code. */
+export function skipsReload(mayCopy: boolean, running: string, installed: string | undefined): boolean {
+  return !mayCopy && syncPlan(running, installed) !== undefined
 }
 /** The command that puts the installed version's files over the running copy, or nothing when they are the same folder or
  * either is not a plugin cache folder (a working copy is never written over). */
 export function syncPlan(running: string, installed: string | undefined): string[] | undefined {
   const norm = (x: string) => x.replace(/[\\/]+$/, '').replaceAll('\\', '/')
   const cached = (x: string) => /\/cache\//.test(norm(x))
-  if (!installed || norm(installed) === norm(running) || !cached(installed) || !cached(running)) return undefined
+  if (!installed || sameFolder(installed, running) || !cached(installed) || !cached(running)) return undefined
   return /^[A-Za-z]:|\\/.test(running)
     ? ['robocopy', installed, running, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP']
     : ['cp', '-R', `${installed}/.`, running]
@@ -3286,7 +3328,13 @@ export function sameFolder(a: string, b: string): boolean {
 }
 /** The order the CLI looks through scopes for a project when no scope is given (the first one installed wins). */
 const SCOPE_ORDER = ['local', 'project', 'user', 'managed']
-const entryKey = (e: InstallEntry) => `${String(e.scope ?? '')}|${String(e.projectPath ?? '')}`
+/** A folder written one way, each path on its own: one slash, none at the end, and a Windows path in lower case. */
+const folderKey = (x: string) => {
+  const y = x.replaceAll('\\', '/').replace(/\/+$/, '')
+  return /^[A-Za-z]:|\\/.test(x) ? y.toLowerCase() : y
+}
+/** An entry's scope and project, the project written as `sameFolder` compares it. */
+const entryKey = (e: InstallEntry) => `${String(e.scope ?? '')}|${typeof e.projectPath === 'string' ? folderKey(e.projectPath) : String(e.projectPath ?? '')}`
 /** This chat's entry: the first in the CLI's order that applies to the chat's project (local and project scopes only to
  * their own project). Not the one naming the folder this code runs from: a second update in one chat runs from the old
  * folder, which another scope may still name. None when that scope has two entries or nothing applies. */
@@ -3299,18 +3347,54 @@ export function ownEntry(entries: readonly InstallEntry[], project: string | und
   }
   return undefined
 }
-/** `ownEntry`, unless it does not name the folder this code runs from while a local or project entry does: then the
- * chat may run that one (its project root told apart from the entry's), and neither is guessed. A second update in one
- * chat stops here too when another project's entry still names the old folder. Not guarded: a local or project entry
- * picked for a root the chat moved to (/cd) while a user entry names the folder this code runs from. */
-export function chatEntryOf(entries: readonly InstallEntry[], project: string | undefined, running: string): InstallEntry | undefined {
-  const own = ownEntry(entries, project)
-  if (!own) return undefined
+/** An entry an Update updated, for the next Update or Uninstall in a chat of the same project running from the same
+ * folder (chats go on running from the folder they started with, which the entry no longer names), and the version it
+ * put in. Chats of one project and folder run the same install, so it does not matter which of them updated. */
+export type UpdatedEntry = { running: string; root: string; key: string; version: string }
+/** At most this many are kept, newest first: one per project and running folder. */
+const UPDATED_KEEP = 20
+/** The one kept for this project and running folder, or nothing. */
+export function updatedFor(kept: readonly UpdatedEntry[], running: string, root: string | undefined): UpdatedEntry | undefined {
+  return root ? kept.find(k => sameFolder(k.running, running) && sameFolder(k.root, root)) : undefined
+}
+/** `kept` with `entry` first, in place of the one for the same project and running folder, at most UPDATED_KEEP. */
+export function withUpdated(kept: readonly UpdatedEntry[], entry: UpdatedEntry): UpdatedEntry[] {
+  return [entry, ...kept.filter(k => !(sameFolder(k.running, entry.running) && sameFolder(k.root, entry.root)))].slice(0, UPDATED_KEEP)
+}
+/** This chat's entry for Update and Uninstall, `root` being the project the chat started in:
+ * - `ownEntry`, when it names the folder this code runs from;
+ * - otherwise, after an Update in a chat of this project from the same folder, the entry it updated, when it is there
+ *   once and has moved on from that folder;
+ * - otherwise `ownEntry`, when no other entry names that folder;
+ * - none when another entry names it: the chat may run that one (a second update with no record of the first, made in a
+ *   terminal), so neither is guessed. */
+export function chatEntryOf(entries: readonly InstallEntry[], root: string | undefined, running: string, kept: readonly UpdatedEntry[]): InstallEntry | undefined {
   const onRunning = (e: InstallEntry) => typeof e.installPath === 'string' && sameFolder(e.installPath, running)
-  if (!onRunning(own) && entries.some(e => e !== own && (e.scope === 'local' || e.scope === 'project') && onRunning(e))) return undefined
+  const own = ownEntry(entries, root)
+  if (own && onRunning(own)) return own
+  const updated = updatedFor(kept, running, root)
+  if (updated) {
+    const found = entries.filter(e => entryKey(e) === updated.key)
+    if (found.length === 1 && !onRunning(found[0]!)) return found[0]
+  }
+  if (!own) return undefined
+  if (entries.some(e => e !== own && onRunning(e))) return undefined
   return own
 }
-const chatEntry = async ($: EngineInterface) => chatEntryOf((await installEntries($)) ?? [], await $.session.root().catch(() => undefined), $.plugin.root)
+/** The project the chat started in (kept at the session start), or its root now where that was not kept. */
+const chatRoot = async ($: EngineInterface) => (await read($, startRoot).catch(() => null)) ?? (await $.session.root().catch(() => undefined))
+const keptUpdated = async ($: EngineInterface) => asUpdatedEntries(await $.store.get('updatedEntries').catch(() => null))
+const chatEntry = async ($: EngineInterface) => chatEntryOf((await installEntries($)) ?? [], await chatRoot($), $.plugin.root, await keptUpdated($))
+/** The kept `UpdatedEntry` list, leaving out anything else. */
+export function asUpdatedEntries(x: unknown): UpdatedEntry[] {
+  if (!Array.isArray(x)) return []
+  return x.filter((o): o is UpdatedEntry => !!o && typeof o === 'object' && ['running', 'root', 'key', 'version'].every(k => typeof (o as Record<string, unknown>)[k] === 'string'))
+}
+/** Whether the new version's files may go into the folder this chat runs from: not when another entry (another scope or
+ * project) still names it, as that install's files would change under it. */
+export function mayCopyIntoRunning(after: readonly InstallEntry[], key: string, running: string): boolean {
+  return !after.some(e => entryKey(e) !== key && typeof e.installPath === 'string' && sameFolder(e.installPath, running))
+}
 /** Said when this chat's entry cannot be told, and so nothing is run. */
 const noOwnEntry = (what: 'update' | 'uninstall') => {
   const text = `which install this chat runs from could not be told (from installed_plugins.json, or this chat loads effortless from a folder), so nothing was run: ${what} it in a terminal with claude plugin ${what} --scope <scope>, in the project's folder for a project or local scope.`
@@ -3338,6 +3422,7 @@ async function syncRunningCopy($: EngineInterface, installed: string | undefined
 }
 // The reload is queued until Claude is idle: pressed mid-reply, it waits for the reply to finish.
 const UPDATE_LOADING = 'Installed. Loads as soon as Claude is idle.'
+const NEW_CHAT = 'Installed. Open a new chat to load it.'
 /** A plain /reload-plugins holds back a change that would make the next message re-read the chat without the cache
  * (new commands do), says "installed but not applied" and keeps the old code running. Update was pressed: apply it. */
 export const RELOAD_ARGS = '--force'
@@ -4326,6 +4411,12 @@ export const register: Register = (on, options) => {
     void $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).then(t => { ownVersion = String(JSON.parse(String(t)).version ?? '') }).catch(() => undefined)
     void afterLoad($).catch(() => undefined)
     void drainSetupSave($).catch(() => undefined)
+    // Where the chat started, for Update and Uninstall after a /cd: kept once, as the host keeps it for the session.
+    void (async () => {
+      if (await read($, startRoot)) return
+      const root = await $.session.root()
+      await update($, startRoot, held => held ?? root)
+    })().catch(() => undefined)
     startTimers($, 'start')
     // Clear the status entry older versions set.
     $.ui.status(undefined)
@@ -4423,9 +4514,10 @@ export const register: Register = (on, options) => {
         lastUpdateCheck = `check failed: ${String(error).slice(0, 120)}`
         return 'unknown'
       })
+      await showHeldBack($, found)
       const card = await read($, updateCard)
       if (!card || card.stage === 'done')
-        return { text: found === 'newest' ? `effortless ${(await installedVersion($)) ?? ''} is the newest (${lastUpdateCheck}).` : `Could not tell whether a newer effortless is out (${lastUpdateCheck}).` }
+        return { text: found === 'newest' ? `effortless ${lastLook.installed ?? (await installedVersion($)) ?? ''} is the newest (${lastUpdateCheck}).` : `Could not tell whether a newer effortless is out (${lastUpdateCheck}).` }
       void runUpdate($, card)
       return { text: `Updating to ${card.version}…` }
     }

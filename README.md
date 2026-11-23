@@ -91,7 +91,8 @@ no key, runs on your own Claude login) or add **Jev** (a TypeSafe key, about 4x 
 smarter, and pick how handoffs are written. Run `/effortless setup` to go through it again, or change any of it in ⚙.
 
 Updates come to you: when a new version is out, a card above the prompt offers **Update** or **Later**. Update loads the
-new version in the chat you pressed it in, with nothing to type.
+new version in the chat you pressed it in, with nothing to type. Where an install of another scope or project uses the
+same folder as that chat, the new version loads in a new chat instead, and the card says so.
 
 ## What the bar shows
 

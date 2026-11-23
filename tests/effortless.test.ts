@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ, longPromptFactor, helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntry, chatEntryOf, scopeArgs, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
+import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ, longPromptFactor, helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntry, chatEntryOf, asUpdatedEntries, updatedFor, withUpdated, mayCopyIntoRunning, skipsReload, scopeArgs, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -4232,7 +4232,7 @@ describe('updates', () => {
     return text
   }
 
-  test("this chat's install is the first scope in the CLI's order that applies to its project", () => {
+  test("the install Update and Uninstall act on: the CLI's order for the chat's project, the one an earlier Update updated, none when unsure", () => {
     const running = 'C:\\Users\\x\\.claude\\plugins\\cache\\effortless-ayumu\\effortless\\1.0.0'
     const user = { scope: 'user', installPath: 'c:/Users/x/.claude/plugins/cache/effortless-ayumu/effortless/1.0.0/' }
     const other = { scope: 'project', projectPath: 'C:\\work', installPath: 'C:\\Users\\x\\.claude\\plugins\\cache\\effortless-ayumu\\effortless\\0.9.0' }
@@ -4256,12 +4256,50 @@ describe('updates', () => {
     expect(ownEntry([other], undefined)).toBeUndefined()
     expect(ownEntry([user, { ...user, installPath: 'C:\\z' }], 'C:\\work')).toBeUndefined()
     expect(ownEntry([], 'C:\\work')).toBeUndefined()
-    // Used only when it names the folder this code runs from, or no local or project entry does.
-    expect(chatEntryOf([user, other], 'C:\\elsewhere', running)).toBe(user)
-    expect(chatEntryOf([moved, other], 'C:\\elsewhere', running)).toBe(moved)
-    expect(chatEntryOf([sharedOld, moved], 'C:\\elsewhere', running)).toBeUndefined()
-    expect(chatEntryOf([user, sharedOld], 'C:\\elsewhere', running)).toBe(user)
-    expect(chatEntryOf([other], 'C:\\elsewhere', running)).toBeUndefined()
+    // Used only when it names the folder this code runs from, or no other entry does.
+    const at = 'C:\\elsewhere'
+    expect(chatEntryOf([user, other], at, running, [])).toBe(user)
+    expect(chatEntryOf([moved, other], at, running, [])).toBe(moved)
+    expect(chatEntryOf([sharedOld, moved], at, running, [])).toBeUndefined()
+    expect(chatEntryOf([user, sharedOld], at, running, [])).toBe(user)
+    expect(chatEntryOf([other], at, running, [])).toBeUndefined()
+    // A root that is not the chat's (a /cd the start root was not kept for) with its own install elsewhere: none.
+    const localThere = { scope: 'local', projectPath: 'C:\\there', installPath: 'C:\\Users\\x\\.claude\\plugins\\cache\\effortless-ayumu\\effortless\\0.9.0' }
+    expect(chatEntryOf([user, localThere], 'C:\\there', running, [])).toBeUndefined()
+    // A second update in a chat of this project, from the same folder: the entry the first one updated.
+    const kept = { running: running.toLowerCase(), root: 'c:/elsewhere/', key: 'user|', version: '1.0.1' }
+    expect(chatEntryOf([sharedOld, moved], at, running, [kept])).toBe(moved)
+    // Kept for another project or another folder, of an entry gone or twice, or with no root to tell: not used.
+    expect(chatEntryOf([sharedOld, moved], 'C:\\work', running, [kept])).toBe(sharedOld)
+    expect(chatEntryOf([sharedOld, moved], at, running, [{ ...kept, running: 'C:\\other' }])).toBeUndefined()
+    expect(chatEntryOf([sharedOld, moved], undefined, running, [kept])).toBeUndefined()
+    expect(chatEntryOf([sharedOld], at, running, [kept])).toBeUndefined()
+    expect(chatEntryOf([sharedOld, moved, { ...moved, installPath: 'C:\\z' }], at, running, [kept])).toBeUndefined()
+    // A kept entry never comes before this project's own install on the folder, and is not taken while still on it.
+    const localHere = { scope: 'local', projectPath: 'C:\\elsewhere', installPath: running }
+    expect(chatEntryOf([localHere, moved], at, running, [kept])).toBe(localHere)
+    expect(chatEntryOf([user, localThere], 'C:\\there', running, [{ ...kept, root: 'C:\\there' }])).toBeUndefined()
+    // The kept list: one per project and folder, newest first, at most 20, and nothing that is not one.
+    expect(updatedFor([kept], running, 'C:\\Elsewhere')).toBe(kept)
+    expect(updatedFor([kept], running, undefined)).toBeUndefined()
+    const newer = { ...kept, root: 'C:\\elsewhere', version: '1.0.2' }
+    expect(withUpdated([kept], newer)).toEqual([newer])
+    const many = Array.from({ length: 25 }, (_, i) => ({ ...kept, root: `C:\\p${i}` }))
+    expect(withUpdated(many, newer)).toHaveLength(20)
+    expect(withUpdated(many, newer)[0]).toBe(newer)
+    expect(asUpdatedEntries([kept, null, 'x', { ...kept, version: 1 }, { running }])).toEqual([kept])
+    expect(asUpdatedEntries({ kept })).toEqual([])
+    // An entry's key is its project as sameFolder sees it.
+    expect(folderOf([{ ...other, projectPath: 'c:/WORK/' }], 'project|c:/work')).toBe(other.installPath)
+    // The new version's files go into the running folder only when no other entry still names it; held back from a
+    // cache folder, the reload is skipped.
+    expect(mayCopyIntoRunning([moved, other], 'user|', running)).toBe(true)
+    expect(mayCopyIntoRunning([moved, sharedOld], 'user|', running)).toBe(false)
+    expect(mayCopyIntoRunning([{ ...user, installPath: running }], 'user|', running)).toBe(true)
+    expect(skipsReload(false, running, moved.installPath)).toBe(true)
+    expect(skipsReload(true, running, moved.installPath)).toBe(false)
+    expect(skipsReload(false, 'C:\\src\\effortless', moved.installPath)).toBe(false)
+    expect(syncPlan(running, running.toUpperCase())).toBeUndefined()
     // The CLI is told the scope, and a project's own scope runs in that project; no entry, nothing added.
     expect(scopeArgs(user)).toEqual({ args: ['--scope', 'user'] })
     expect(scopeArgs(other)).toEqual({ args: ['--scope', 'project'], cwd: 'C:\\work' })
@@ -4283,11 +4321,88 @@ describe('updates', () => {
   })
 
   test("another project's entry on the folder this chat runs from, and the user entry elsewhere: nothing is run", DESK, async ($, on) => {
-    // A second update in one chat while another project still names the old folder, or this chat running that
-    // project's install with its root told apart: which one it is cannot be told, so neither is updated.
+    // With no update made in this chat: a second update after one made in a terminal, or this chat running that
+    // project's install with its root moved: which one it is cannot be told, so neither is updated.
     const w = world(on, { installed: '1.0.0', latest: '1.0.1', mineAt: '/h/.claude/plugins/cache/effortless-ayumu/effortless/0.9.9', others: [{ scope: 'project', projectPath: '/work/other', installPath: '<root>', version: '1.0.0' }] })
     expect(await pressUpdate($)).toContain('could not be told')
     expect(w.ran.some(r => r.includes('plugin update '))).toBe(false)
+  })
+
+  test("two updates in one chat, with another project's install on the folder it started from: both update the user scope", DESK, async ($, on) => {
+    const v = { installed: '1.0.0', latest: '1.0.1', root: '/work/a', others: [{ scope: 'project', projectPath: '/work/other', installPath: '<root>', version: '1.0.0' }] }
+    const w = world(on, v)
+    expect(await pressUpdate($)).not.toContain('Update failed')
+    // (Whether the new files go into the old folder is mayCopyIntoRunning's test: this chat's folder is no cache folder.)
+    // Still in this chat, from the old folder, which only the other project's entry names now; a newer version lands.
+    v.installed = '1.0.1'
+    v.latest = '1.0.2'
+    await start($)
+    await settle()
+    const r = (await $.command.run({ command: 'effortless', args: 'update' } as never)) as { text?: string }
+    expect(r.text).toContain('Updating to 1.0.2')
+    await settle()
+    expect(w.ran.filter(x => x.includes('plugin update '))).toEqual(['claude plugin update effortless@effortless-ayumu --scope user', 'claude plugin update effortless@effortless-ayumu --scope user'])
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    expect(await drawn(ui)).not.toContain('Update failed')
+    await ui.unmount()
+  })
+
+  test("after an update the chat's Uninstall acts on the install it updated, though another project's names the old folder", DESK, async ($, on) => {
+    const w = world(on, { installed: '1.0.0', latest: '1.0.1', root: '/work/a', others: [{ scope: 'project', projectPath: '/work/other', installPath: '<root>', version: '1.0.0' }] })
+    on('ui.toast', () => ({ value: undefined }) as never)
+    expect(await pressUpdate($)).not.toContain('Update failed')
+    // The Updated card stands above the prompt now: Settings is opened by its command.
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await ui.press({ key: 'settings-card-show' })
+    w.ran.length = 0
+    await ui.press({ key: 'settings-uninstall' })
+    await ui.press({ key: 'settings-uninstall' })
+    await settle()
+    await ui.unmount()
+    expect(w.ran).toEqual(['claude plugin uninstall effortless@effortless-ayumu --scope user'])
+  })
+
+  test("after a /cd to a project with its own install on the same folder, Update still updates the install the chat started with", DESK, async ($, on) => {
+    const v = { installed: '1.0.0', latest: '1.0.1', root: '/work/a', others: [{ scope: 'local', projectPath: '/work/q', installPath: '<root>', version: '1.0.0' }] }
+    const w = world(on, v)
+    await start($)
+    await settle()
+    // The chat moves to /work/q, whose local install shares the folder the chat runs from; a session start after it,
+    // should one come, does not take the new root for the one the chat started in.
+    v.root = '/work/q'
+    await start($)
+    await settle()
+    const ui = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(ui)
+    await ui.press({ key: 'update-go' })
+    await settle()
+    expect(await drawn(ui)).not.toContain('Update failed')
+    await ui.unmount()
+    expect(w.ran.filter(x => x.includes('plugin update '))).toEqual(['claude plugin update effortless@effortless-ayumu --scope user'])
+  })
+
+  test('a version installed for this chat but held back from its folder is not offered again', DESK, async ($, on) => {
+    // The other project's install still uses the folder this chat runs from, so the new files did not go into it.
+    const v = { installed: '1.0.0', latest: '1.0.1', root: '/work/a', others: [{ scope: 'project', projectPath: '/work/other', installPath: '<root>', version: '1.0.0' }] }
+    world(on, v)
+    expect(await pressUpdate($)).not.toContain('Update failed')
+    // The chat still runs 1.0.0 from its folder; 1.0.1 was installed for it.
+    await $.command.run({ command: 'effortless', args: 'settings' } as never)
+    const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+    await pastSetup(panel)
+    await panel.press({ key: 'settings-check-update' })
+    await settle()
+    expect((await panel.find({ key: 'settings-update' }))?.text ?? '').not.toContain('Update to 1.0.1')
+    // The card that says to open a new chat is back after the look, above the prompt once Settings is closed.
+    await panel.press({ key: 'settings-close' })
+    await settle()
+    expect(await drawn(panel)).toContain('Open a new chat')
+    await panel.unmount()
+    // The answer names the version installed for this chat, and the one it still runs.
+    const r = (await $.command.run({ command: 'effortless', args: 'update' } as never)) as { text?: string }
+    expect(r.text).toContain('effortless 1.0.1 is the newest')
+    expect(r.text).toContain('this chat runs 1.0.0: open a new chat')
   })
 
   test('installed_plugins.json unreadable after the update: the card says which install it updated could not be read', DESK, async ($, on) => {

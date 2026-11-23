@@ -194,6 +194,8 @@ declare module 'claude-code' {
       updateCard: { stage: 'offer' | 'updating' | 'done' | 'failed'; version: string; note: string; at: number; detail?: string } | null
       /** The Settings header's "Check for updates": idle, checking, newest, failed, or "found <version>" (the button then installs it). */
       updateCheck: string
+      /** The chat's project root when it started, before any /cd: the install it runs was picked for this one. */
+      startRoot: string | null
       /** The setup guide's step, or null when it is closed. */
       setupStep: 'pick' | 'jev' | 'lean' | 'handoff' | 'done' | null
       /** Choices made in the setup guide, saved together at Done or the cross. */
