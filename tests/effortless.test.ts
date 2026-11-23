@@ -3791,7 +3791,7 @@ describe('updates', () => {
   const DESK = { options: { layout: 'default' } } as never
   /** A session with `installed` on disk and `latest` on main; records what the mod runs. */
   type OtherInstall = { scope: string; projectPath?: string; installPath: string; version: string }
-  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; noRepo?: boolean; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string>; webDown?: boolean; noMarketplaceCopy?: boolean; installsTo?: string; installedList?: string; marketplaceFails?: boolean; others?: OtherInstall[]; othersFirst?: boolean; mineAt?: string; root?: string; showMissing?: boolean; brokenAfterUpdate?: boolean }) {
+  function world(on: On, v: { installed: string; latest: string; fails?: string; git?: string; noRepo?: boolean; installPath?: string; noCli?: (bin: string) => boolean; env?: Record<string, string>; webDown?: boolean; noMarketplaceCopy?: boolean; installsTo?: string; installedList?: string; marketplaceFails?: boolean; others?: OtherInstall[]; othersFirst?: boolean; mineAt?: string; root?: string; showMissing?: boolean; brokenAfterUpdate?: boolean; fetchFails?: string }) {
     engine(on, v.env)
     const clock = mock.clock(on)
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
@@ -3849,6 +3849,9 @@ describe('updates', () => {
       // The newest commit fetched earlier without its files: show fails until a refetch brings them.
       if (e.argv[0] === 'git' && e.argv.includes('--refetch')) refetched = true
       if (v.showMissing && !refetched && e.argv[0] === 'git' && e.argv.includes('show')) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: bad object FETCH_HEAD:public.json' } } as never
+      // A plain fetch that fails with this text (until a refetch, or for good when offline).
+      if (v.fetchFails && e.argv[0] === 'git' && e.argv.includes('fetch') && !e.argv.includes('--refetch') && !(refetched && v.fetchFails.includes('promisor')))
+        return { value: { exitCode: 128, stdout: '', stderr: v.fetchFails } } as never
       const args = e.argv.slice(1).join(' ')
       if (v.marketplaceFails && args.startsWith('plugin marketplace update')) return { value: { exitCode: 1, stdout: '', stderr: 'offline' } } as never
       if (!v.fails && args.startsWith('plugin update ')) {
@@ -3972,6 +3975,28 @@ describe('updates', () => {
     expect(w.ran.findIndex(r => r.includes('show FETCH_HEAD:public.json'))).toBeLessThan(refetch)
     expect(w.ran.findIndex((r, i) => i > refetch && r.includes('show FETCH_HEAD:public.json'))).toBeGreaterThan(refetch)
   })
+
+  for (const [what, fetchFails, refetches] of [
+    ['a fetch that needs a file the folder lacks is refetched once, and the look still goes by git', "warning: lazy fetching disabled; some objects may not be available\nfatal: could not fetch 4263d5c from promisor remote\nfatal: index-pack failed", 1],
+    ['a fetch that fails offline is not refetched', 'fatal: unable to access: Could not resolve host: github.com', 0],
+  ] as const)
+    test(what, DESK, async ($, on) => {
+      const w = world(on, { installed: '1.0.1', latest: '1.0.1', fetchFails, git: JSON.stringify([{ version: '1.0.2', note: 'From git.' }]) })
+      await start($)
+      await settle()
+      await $.command.run({ command: 'effortless', args: 'settings' } as never)
+      const panel = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+      await pastSetup(panel)
+      await $.command.run({ command: 'effortless', args: 'settings' } as never)
+      const again = await $.ui.mount({ plugin: 'effortless', surface: 'desktop', ...BAND })
+      await again.press({ key: 'settings-check-update' })
+      await settle()
+      // Over both looks (at load and pressed): once refetched, the folder has the files and plain fetches go through.
+      expect(w.ran.filter(r => r.includes('--refetch'))).toHaveLength(refetches)
+      // Refetched: 1.0.2, on git only, is found. Offline: git gives nothing, and the web and the marketplace say 1.0.1.
+      if (refetches) expect((await again.find({ key: 'settings-update' }))?.text).toContain('Update to 1.0.2')
+      else expect(w.ran.some(r => r.includes('show FETCH_HEAD:public.json'))).toBe(false)
+    })
 
   test('a new release-check folder gets the fork as origin and fetches its main', DESK, async ($, on) => {
     const w = world(on, { installed: '1.0.1', latest: '1.0.1', noRepo: true, git: JSON.stringify([{ version: '1.0.2', note: 'From git.' }]) })

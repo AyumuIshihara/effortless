@@ -2953,15 +2953,24 @@ async function latestFromGit($: EngineInterface): Promise<{ release?: { version:
     // Small files come with the fetch. A file left out (blob:none, as before 1.72.11) is not fetched later by
     // `git show` where git runs with GIT_NO_LAZY_FETCH=1, which the Claude Code CLI sets for the git it runs.
     const fetch = (...extra: string[]) => git('fetch', '-q', ...extra, '--depth', '1', '--filter=blob:limit=256k', 'origin', RELEASE_BRANCH)
-    const fetched = await fetch()
-    if (fetched.exitCode !== 0) return failed('fetch', fetched)
+    // A folder fetched without files before (blob:none) has commits whose files it lacks. The server may send a newer
+    // file as a change to one of those, which git may not fetch here ("could not fetch … from promisor remote"), so a
+    // fetch failed that way is refetched once: a refetch asks for everything again and sends no changes. Not one that
+    // failed otherwise (offline), which would only wait twice.
+    let refetched = false
+    let fetched = await fetch()
+    if (fetched.exitCode !== 0 && /promisor|index-pack|lazy fetching/i.test(fetched.stderr)) {
+      refetched = true
+      fetched = await fetch('--refetch')
+    }
+    if (fetched.exitCode !== 0) return failed(refetched ? 'refetch' : 'fetch', fetched)
     let shown = await git('show', 'FETCH_HEAD:public.json')
-    if (shown.exitCode !== 0 && /bad object|missing|could not read/i.test(shown.stderr)) {
+    if (shown.exitCode !== 0 && !refetched && /bad object|missing|could not read/i.test(shown.stderr)) {
       // The newest commit came earlier without its files (blob:none): fetching it again sends nothing, so refetch it once.
       // Only for a file missing here, not for a public.json gone. One of 256 KiB or more is never fetched (the filter
       // leaves it out), so it would be refetched on every look: the look then goes the web way as before.
-      const refetched = await fetch('--refetch')
-      if (refetched.exitCode !== 0) return failed('refetch', refetched)
+      const again = await fetch('--refetch')
+      if (again.exitCode !== 0) return failed('refetch', again)
       shown = await git('show', 'FETCH_HEAD:public.json')
     }
     if (shown.exitCode !== 0) return failed('show', shown)
