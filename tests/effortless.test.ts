@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ,helperFloor, namedEffort, hotVisible,looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntryKeys, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
+import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ, longPromptFactor, helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntryKeys, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -165,9 +165,19 @@ describe('auto', () => {
     // Opus chat, cache warm: a cold Sonnet writes the whole chat and costs more; a warm Sonnet is far cheaper.
     expect(routeWorth('sonnet', 'opus', big, { to: false, inUse: true })).toBe(false)
     expect(routeWorth('sonnet', 'opus', big, { to: true, inUse: true })).toBe(true)
-    // A cold Haiku writes the whole chat (twice its input price) against a warm Opus read (MODEL_READ): still more.
-    expect(routeWorth('haiku', 'opus', big, { to: false, inUse: true })).toBe(false)
-    expect(routeWorth('haiku', 'opus', big, { to: true, inUse: true })).toBe(true)
+    // Haiku 5.5 charges a prompt over 100k tokens five times its price. In a chat over that, a cold Haiku writes the whole
+    // chat ($1 a million tokens) against a warm Opus read ($0.20): more. A warm Haiku ($0.05) reads it for less.
+    const long = 200_000
+    expect(routeWorth('haiku', 'opus', long, { to: false, inUse: true })).toBe(false)
+    expect(routeWorth('haiku', 'opus', long, { to: true, inUse: true })).toBe(true)
+    // Well below 100k tokens, a cold Haiku writes the chat ($0.20) for what a warm Opus reads it for, and routeWorth sends
+    // a switch at the same cost to the cheaper model. Within a tenth of 100k, the new message may take the prompt over it,
+    // so the chat is taken for a long one at five times the price.
+    expect(routeWorth('haiku', 'opus', 89_999, { to: false, inUse: true })).toBe(true)
+    expect(routeWorth('haiku', 'opus', 90_000, { to: false, inUse: true })).toBe(false)
+    expect(longPromptFactor('haiku', 89_999)).toBe(1)
+    expect(longPromptFactor('haiku', 90_000)).toBe(5)
+    expect(longPromptFactor('opus', 1_000_000)).toBe(1)
     // The chat's own cache gone cold: staying would write it all again on Opus, so Sonnet wins even cold.
     expect(routeWorth('sonnet', 'opus', big, { to: false, inUse: false })).toBe(true)
     // No context size known: route as before.
@@ -3093,7 +3103,7 @@ describe('dashboard', () => {
     // Sonnet has never answered: its cache is cold, and writing 100k tokens there costs more than reading them on Opus.
     await ask('{"model":"sonnet","effort":"low","why":"small fix"}', 'rename this variable to userId')
     expect(sent.at(-1)).toBe('claude-opus-5-5')
-    // A cold Haiku loses to a warm Opus read as well, whatever the size of the chat.
+    // A cold Haiku loses to a warm Opus read as well: on a chat of 100k tokens Haiku charges five times.
     await mocked.advance(30 * 60_000)
     await ask('{"model":"haiku","effort":"low","why":"lookup"}', 'what is the folder called')
     expect(sent.at(-1)).toBe('claude-opus-5-5')
@@ -4596,6 +4606,44 @@ describe('agent panel', () => {
     expect(text).toContain('All done')
     expect(text).toContain('✓ 1 done')
     await pane.unmount()
+  })
+
+  test('with Helpers on, a helper on a model not cacheSafe (a Bedrock id) goes out at the app\'s effort', { options: { helpers: 'on' } } as never, async ($, on) => {
+    judgeSays(on, '{"model":"opus","effort":"low","why":"quick search"}')
+    on('agent.spawn', () => ({ agentId: 'b1', model: 'us.anthropic.claude-opus-5-5' }) as never)
+    on('turn.complete', () => ({ text: '' }))
+    const sent = recordSteps(on)
+    await start($, on)
+    await $.agent.spawn({ prompt: 'list the files under hooks', description: 'find files', subagentType: 'Explore' } as never)
+    for (const index of [0, 1]) {
+      for await (const _ of $.turn.step({ turnId: 't1', index, model: 'us.anthropic.claude-opus-5-5', effort: 'high', messageCount: 1, agentId: 'b1' } as never)) {
+        // drain
+      }
+    }
+    expect(sent.map(s => s.effort)).toEqual(['high', 'high'])
+    // The panel does not show the judged level it never went out at.
+    await $.command.run({ command: 'effortless', args: 'agents' })
+    const pane = await $.ui.mount(PANE)
+    await pane.press({ key: 'agent-b1-press' }).catch(() => undefined)
+    expect(await drawn(pane)).toContain("the app's effort on this model")
+    expect(await drawn(pane)).not.toContain('quick search')
+    await pane.unmount()
+  })
+
+  test('with Helpers on, a Bedrock chat asks no judge at a spawn: the level would not be sent', { options: { helpers: 'on' } } as never, async ($, on) => {
+    const asked = judgeSays(on, '{"model":"opus","effort":"low","why":"quick search"}')
+    on('agent.spawn', () => ({ agentId: 'b2', model: 'us.anthropic.claude-opus-5-5' }) as never)
+    on('turn.complete', () => ({ text: '' }))
+    // As start() does, with the chat on a Bedrock id.
+    engine(on, {}, 'us.anthropic.claude-opus-5-5')
+    mock.clock(on)
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    on('classic.SessionStart', () => ({}) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
+    await $.agent.spawn({ prompt: 'list the files under hooks', description: 'find files', subagentType: 'Explore' } as never)
+    expect(asked.some(p => p.includes('Explore subagent'))).toBe(false)
   })
 
   test('with Helpers on, the judge picks a subagent\'s effort at its spawn and every request of it runs at that', { options: { helpers: 'on' } } as never, async ($, on) => {

@@ -43,7 +43,7 @@ it is built for. effortless uses it in three places:
 | | |
 |---|---|
 | **The judge** | reads each prompt and picks the effort, in about a second, on your own Claude login |
-| **Cheaper model when it can** | experimental, off by default. When on, a prompt the judge calls simple may run on Haiku 5.5 (or Sonnet), never above your chat's model, but only when the switch pays: each model keeps its own prompt cache, so in a chat that is in use the switch usually costs more than it saves ([why](#why-model-switching-is-off)) |
+| **Cheaper model when it can** | experimental, off by default. When on, a prompt the judge calls simple may run on Haiku 5.5 (or Sonnet), never above your chat's model, but only when the switch pays: each model keeps its own prompt cache, so in a chat that is in use a switch to a model whose cache is cold often costs more than it saves ([why](#why-model-switching-is-off)) |
 | **Compaction** | every compaction, `/compact` and the automatic one included, is summarized by Haiku 5.5. If Haiku fails, Claude Code compacts as usual |
 
 The cheaper model is switched on in Settings → Model; compaction is switched in Settings → Handoff → Compact with.
@@ -185,6 +185,11 @@ Moving a simple prompt to Haiku looks cheap on a single prompt: the cheaper answ
 cost 60 to 77% less. But each model keeps its own prompt cache, so a prompt moved mid-chat has to write the whole chat
 into the other model's cache first. Measured on an 80k-token chat, that costs about 5 times what staying on a warm
 Opus does (10 times for Sonnet). So **Cheaper model when it can** is off by default and marked experimental.
+That was measured at earlier prices. At Haiku 5.5's prices, writing a chat of under 90k tokens into a cold Haiku cache
+costs what reading it from a warm Opus 5.5 cache does, so when the option is on such a prompt on an Opus, Fable or
+Mythos chat now moves to Haiku; on a longer chat Haiku charges five times (a prompt over 100k tokens) and the prompt
+stays. On a Sonnet chat a cold Haiku still costs more, and so does a cold Sonnet anywhere. The check uses the chat's
+size before the prompt goes out, so a moved prompt whose tool calls grow it past 100k tokens pays the higher price.
 [Details](bench/RESULTS.md#3-why-model-switching-is-off-node-benchquality-mjs).
 
 ## How often the judge is right
@@ -216,7 +221,7 @@ Effort only changes on Opus 5.5, Sonnet 5.5, Fable 5.2 and Mythos 5.2. On other 
 
 Mythos 5.2 is the same model as Fable 5.2, open to organizations Anthropic has verified. Its Max is the Fable/Mythos max above and a prompt is never moved to it. A suggestion never switches between Fable and Mythos; where the chat is on another model and the judge names Mythos, it offers Fable. The model row shows a Mythos button only on a Mythos chat, and it runs `/model claude-mythos-5-2`, as Claude Code has no alias for it. A subagent given an effort of its own (the Agent call's or its definition's) keeps that effort on every model. A measurement on Claude Code 2.1.330 (2026-11-23) read the same cache after low → high and high → low as with an unchanged effort.
 
-Fable 5.2 was added in this fork. Claude Code's [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) say a change of effort keeps the cache on Fable 5.1 and later, and a measurement on Claude Code 2.1.321 (2026-11-10) read the same cache after low → high and high → low as with an unchanged effort. Fable 5.1 keeps it only from Claude Code 2.1.260, and effortless does not read Claude Code's version, so Auto still pauses there. The docs also say that on Amazon Bedrock, Google Cloud's Agent Platform, a Claude apps gateway, with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` set or in a HIPAA organisation, a change of effort rewrites the cache on every model. Auto runs only on the ids `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-2` and `claude-mythos-5-2` as written, with nothing more than a date or `[1m]` after them, so it pauses on Bedrock's ids (a prefix such as `anthropic.`, `global.anthropic.` or `us.anthropic.` in front), on Agent Platform's dated ids (`@` before the date) and on an id with another suffix, such as a preview. Agent Platform's plain ids and the other cases are the same ids as Anthropic's own, so effortless does not detect them, as before for Opus and Sonnet.
+Fable 5.2 was added in this fork. Claude Code's [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) say a change of effort keeps the cache on Fable 5.1 and later, and a measurement on Claude Code 2.1.321 (2026-11-10) read the same cache after low → high and high → low as with an unchanged effort. Fable 5.1 keeps it only from Claude Code 2.1.260, and effortless does not read Claude Code's version, so Auto still pauses there. The docs also say that on Amazon Bedrock, Google Cloud's Agent Platform, a Claude apps gateway, with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` set or in a HIPAA organisation, a change of effort rewrites the cache on every model. Auto, Helpers included, runs only on the ids `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-2` and `claude-mythos-5-2` as written, with nothing more than a date or `[1m]` after them, so it pauses on Bedrock's ids (a prefix such as `anthropic.`, `global.anthropic.` or `us.anthropic.` in front), on Agent Platform's dated ids (`@` before the date) and on an id with another suffix, such as a preview. Agent Platform's plain ids and the other cases are the same ids as Anthropic's own, so effortless does not detect them, as before for Opus and Sonnet.
 
 ## Publishing this fork
 

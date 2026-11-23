@@ -2533,13 +2533,21 @@ export function asOffered(verdict: ModelKey, inUse: ModelKey): ModelKey {
   return inUse === 'fable' || inUse === 'mythos' ? inUse : 'fable'
 }
 
-// What one input token costs on each model, in Sonnet's price: Opus about 2x (measured: the same prompt cost 1.97x on Opus), Haiku about a third, Fable and Mythos 4x ($8 against $2 a million input tokens). These are the ratios
+// What one input token costs on each model, in Sonnet's price: Opus about 2x (measured: the same prompt cost 1.97x on Opus), Haiku a twentieth ($0.10 against $2 a million input tokens, for a prompt of up to 100k tokens), Fable and Mythos 4x ($8). These are the ratios
 // the savings estimate uses; they only have to be right enough to tell which side of a switch is cheaper.
-export const MODEL_PRICE: Record<ModelKey, number> = { haiku: 1 / 3, sonnet: 1, opus: 2, fable: 4, mythos: 4 }
+export const MODEL_PRICE: Record<ModelKey, number> = { haiku: 0.05, sonnet: 1, opus: 2, fable: 4, mythos: 4 }
 // What reading the chat's context from a warm cache costs on each model, in Sonnet's input price. Not one share of the
-// input price everywhere: a cache read is $0.10 a million tokens on Sonnet 5.5 and $0.20 on Opus 5.5, Fable 5.2 and
-// Mythos 5.2 alike. Haiku's is not checked, so it keeps the share the other weights use.
-export const MODEL_READ: Record<ModelKey, number> = { haiku: MODEL_PRICE.haiku * WEIGHT.read, sonnet: 0.05, opus: 0.1, fable: 0.1, mythos: 0.1 }
+// input price everywhere: a cache read is $0.10 a million tokens on Sonnet 5.5, $0.20 on Opus 5.5, Fable 5.2 and
+// Mythos 5.2 alike, and $0.01 on Haiku 5.5 (for a prompt of up to 100k tokens).
+export const MODEL_READ: Record<ModelKey, number> = { haiku: 0.005, sonnet: 0.05, opus: 0.1, fable: 0.1, mythos: 0.1 }
+// Haiku 5.5 charges a prompt over 100k tokens (cache reads and writes counted in) five times its every price.
+const HAIKU_LONG_PROMPT = 100_000
+/** How much more every token costs on this model than MODEL_PRICE and MODEL_READ say, for a chat of this many tokens.
+ *  The prompt sent is the chat with the new message (and maybe the last answer) on top, so a chat within a tenth of
+ *  100k tokens is taken for one over it: a switch that misjudges this pays five times for writing the whole chat. */
+export function longPromptFactor(key: ModelKey, contextTokens: number): number {
+  return key === 'haiku' && contextTokens >= HAIKU_LONG_PROMPT * 0.9 ? 5 : 1
+}
 /**
  * Whether sending this one prompt to a cheaper model pays. The chat's context is read from the cache (MODEL_READ) where
  * that model's cache is warm, and written to it where it is cold. A switch to a cold model writes the whole context
@@ -2551,8 +2559,8 @@ export function routeWorth(to: ModelKey, inUse: ModelKey, contextTokens: number,
   if (!(contextTokens > 0)) return true
   // Claude Code writes the 1-hour cache, which costs twice the input price (measured), not the 5-minute 1.25.
   const write = 2
-  const stay = contextTokens * (warm.inUse ? MODEL_READ[inUse] : MODEL_PRICE[inUse] * write)
-  const move = contextTokens * (warm.to ? MODEL_READ[to] : MODEL_PRICE[to] * write)
+  const stay = contextTokens * longPromptFactor(inUse, contextTokens) * (warm.inUse ? MODEL_READ[inUse] : MODEL_PRICE[inUse] * write)
+  const move = contextTokens * longPromptFactor(to, contextTokens) * (warm.to ? MODEL_READ[to] : MODEL_PRICE[to] * write)
   return move <= stay
 }
 // Until when each model's prompt cache is warm for this chat: set by every main response on it.
@@ -4675,7 +4683,8 @@ Saved to ${out}.md and .json` }
       if (e.index === 0) void proof($, `subagent ${e.agentId} (${e.model}): effort ${e.effort ?? 'none'}, its own`)
       return yield* send(e)
     }
-    if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string' && keyOf(e.model) !== 'haiku') {
+    // Not on a model where an effort change may rewrite the cache (cacheSafe): there a helper goes out at the app's effort.
+    if (e.agentId !== undefined && config.helpers === 'on' && typeof e.effort === 'string' && keyOf(e.model) !== 'haiku' && cacheSafe(e.model)) {
       const chosen = await helperEffortOf($, e.agentId)
       const effort = chosen && helperCapped(chosen, e.model)
       if (effort) {
@@ -4824,7 +4833,10 @@ Saved to ${out}.md and .json` }
   on('agent.spawn', async ($, e, next) => {
     // Effort for helpers: the judge reads the subagent's task before it starts (a fork shares the chat's context and
     // keeps its effort). Without a verdict it runs at the chat's effort, as with the setting off.
-    const helper = config.helpers === 'on' && !e.fork && !e.isTeammate && !e.workflow
+    // On a chat whose model is not cacheSafe (a Bedrock id, say), the judged level would not be sent: no judge is asked.
+    const chatModel = await $.session.model().catch(() => undefined)
+    const judgeable = !(typeof chatModel === 'string' && chatModel !== '' && !cacheSafe(chatModel))
+    const helper = config.helpers === 'on' && !e.fork && !e.isTeammate && !e.workflow && judgeable
       ? await helperEffort($, e.prompt, e.subagentType).catch(() => null)
       : null
     const waiting = helper ? { description: e.description, type: e.subagentType, parentId: e.parentAgentId, effort: helper.effort } : null
@@ -4832,10 +4844,15 @@ Saved to ${out}.md and .json` }
     const result = await next(e)
     // One given an effort of its own keeps it (see turn.step): the judged level is neither counted nor shown for it.
     const own = 'agentId' in result && result.agentId ? await ownEffortOf($, result.agentId) : undefined
+    // On Haiku (no effort) and on a model not cacheSafe, turn.step sends the app's effort: the judged one is not used.
+    const steered = !('model' in result) || typeof result.model !== 'string' || (keyOf(result.model) !== 'haiku' && cacheSafe(result.model))
     let shownHelper: Effort | undefined
     if (waiting && typeof own === 'string') {
       helperWaiting = helperWaiting.filter(w => w !== waiting)
       void proof($, `helper ${e.subagentType} "${e.description}": its own effort ${own}`)
+    } else if (waiting && !steered) {
+      helperWaiting = helperWaiting.filter(w => w !== waiting)
+      void proof($, `helper ${e.subagentType} "${e.description}": not steered on ${'model' in result ? result.model : '?'}`)
     } else if (waiting) {
       helperWaiting = helperWaiting.filter(w => w !== waiting)
       // helperPicks keeps the judged level, whichever way the first request came; each request is held to its model's Max
@@ -4858,6 +4875,8 @@ Saved to ${out}.md and .json` }
     if (typeof own === 'string') {
       rec.effort = (EFFORT_LABELS as Record<string, string>)[own] ?? own
       rec.why = 'its own effort'
+    } else if (helper && !steered) {
+      rec.why = "the app's effort on this model"
     } else if (helper) {
       rec.effort = EFFORT_LABELS[shownHelper ?? helper.effort]
       // Held below the judged level by its model's Max: the reason says so, not that helpers start at medium.
