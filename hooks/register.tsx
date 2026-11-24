@@ -1634,16 +1634,16 @@ export const HANDOFF_FULL_PROMPT = [
 export function handoffMessage(handoff: string, after: HandoffAfter, skill?: string): string {
   const ask =
     after === 'confirm'
-      ? 'Read this, say in two lines where things stand and what is next, then wait for me.'
-      : 'Continue with the next step. If it is marked "needs user", say what you need and wait.'
+      ? 'これを読み、今の状況と次にする事を 2 行で書いてから、私の指示を待ってください。'
+      : '次の手順から続けてください。「needs user」と付いた手順は、要る物を書いて待ってください。'
   // A full handoff is the person's own skill: it saves the handoff (a file, memories), and its last words in the chat
   // are often only a note that it did. The new chat is told to read what the skill saved before anything else.
   if (skill)
     return (
-      `Handoff from the previous chat: it ran /${skill}, which saved the handoff. Its last words there:\n\n${handoff.trim()}\n\n` +
-      `First read the handoff /${skill} saved: the files named above, or HANDOFF.md in the project if none is named. ${ask}`
+      `前の会話からの引き継ぎです。前の会話は /${skill} を流して引き継ぎを保存しました。その最後の言葉:\n\n${handoff.trim()}\n\n` +
+      `先に /${skill} が保存した引き継ぎを読んでください（上に名前のあるファイル。無ければプロジェクトの HANDOFF.md）。${ask}`
     )
-  return `Handoff from the previous chat:\n\n${handoff.trim()}\n\n${ask}`
+  return `前の会話からの引き継ぎです。\n\n${handoff.trim()}\n\n${ask}`
 }
 
 // The handoff's text once its turn has ended, waiting for the chat to go idle so it can be cleared and resent.

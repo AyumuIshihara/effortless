@@ -2065,15 +2065,15 @@ describe('cold band', () => {
 describe('handoff', () => {
   test('the first message carries the handoff and what to do next', () => {
     expect(handoffMessage(' the plan ', 'continue')).toBe(
-      'Handoff from the previous chat:\n\nthe plan\n\nContinue with the next step. If it is marked "needs user", say what you need and wait.',
+      '前の会話からの引き継ぎです。\n\nthe plan\n\n次の手順から続けてください。「needs user」と付いた手順は、要る物を書いて待ってください。',
     )
-    expect(handoffMessage('x', 'confirm')).toContain('then wait for me')
+    expect(handoffMessage('x', 'confirm')).toContain('私の指示を待ってください')
     // Full: the skill saved the handoff; its last words may only say so. The new chat reads what it saved first.
     const full = handoffMessage("I've saved the handoff.", 'continue', 'session-handoff')
-    expect(full).toContain('it ran /session-handoff')
-    expect(full).toContain('First read the handoff /session-handoff saved')
+    expect(full).toContain('/session-handoff を流して')
+    expect(full).toContain('先に /session-handoff が保存した引き継ぎを読んでください')
     expect(full).toContain('HANDOFF.md')
-    expect(full).toContain('Continue with the next step')
+    expect(full).toContain('次の手順から続けてください')
   })
 
   test('the prompt asks for checked work, marked user steps and git as of last check', () => {
@@ -2189,7 +2189,7 @@ describe('handoff', () => {
     // The skill's last words only say it saved the handoff: the new chat is told to read what it saved.
     await $.turn.complete({ turnId: 't2', answer: "I've saved the handoff.", durationMs: 1, isAborted: false, reason: 'answer' } as never)
     await mocked.advance(2500)
-    expect(submitted.at(-1)).toContain('First read the handoff /session-handoff saved')
+    expect(submitted.at(-1)).toContain('先に /session-handoff が保存した引き継ぎを読んでください')
     await footer.unmount()
   })
 
@@ -2241,7 +2241,7 @@ describe('handoff', () => {
     await mocked.advance(2500)
     expect(copied).toHaveLength(1)
     expect(copied[0]).toContain('Goal: quick.')
-    expect(copied[0]).toContain('Continue with the next step.')
+    expect(copied[0]).toContain('次の手順から続けてください。')
     expect(ran).not.toContain('clear')
     expect(submitted).toEqual([])
     await footer.unmount()
@@ -2375,7 +2375,7 @@ describe('handoff', () => {
     await mocked.advance(1500)
     expect(ran).toContain('clear')
     expect(submitted.at(-1)).toContain('Goal: ship it. Next: tests.')
-    expect(submitted.at(-1)).toContain('Continue with the next step.')
+    expect(submitted.at(-1)).toContain('次の手順から続けてください。')
     await footer.unmount()
   })
 
