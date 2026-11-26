@@ -147,7 +147,7 @@ Haiku also picks the effort, unless you add Jev, TypeSafe's faster judge (about 
 | `haiku` | Haiku only, a key is never used |
 | `jev` | Haiku and Jev, and the key may also come from `~/.config/jev/.env` |
 
-A key set with `/plugin configure` is kept in Claude Code's secure storage. A key pasted in the setup guide or the Judge card is written in plain text to `~/.config/jev/.env` (the file the jev skills read), never to a file of this repo. If Jev fails or takes longer than 3 seconds, Haiku judges that prompt and effortless tells you why once per session (out of credits, key rejected, no answer).
+A key set with `/plugin configure` is kept in Claude Code's secure storage. A key pasted in the setup guide or the Judge card is written in plain text to `~/.config/jev/.env` (the file the jev skills read), never to a file of this repo. If Jev fails or takes longer than 3 seconds, Haiku judges that prompt and effortless tells you why once per session for each kind of failure (out of credits, key rejected, no answer), with the reason the server gave when it sent one (a key echoed in it is masked).
 
 Short follow-ups such as "go", "ok" or "yes" keep the effort already picked and ask no judge.
 

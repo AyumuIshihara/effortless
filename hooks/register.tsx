@@ -209,7 +209,7 @@ const MODEL_CHOICES = [
 const BIAS_WORDS = ['Cheapest', 'Cheaper', 'Balanced', 'Smarter', 'Smartest'] as const
 // The settings panel's judge test: running, or what it found. Null before a test and once the panel closes.
 const judgeTest = atom({ plugin: 'effortless', key: 'judgeTest' } as const, null)
-// The judge-down band was closed for this reason; a new reason shows it again.
+// The judge-down band was closed for this reason; a new kind of failure (failureKind) shows it again.
 const judgeDownHidden = atom({ plugin: 'effortless', key: 'judgeDownHidden' } as const, null)
 // A usage limit is close: which window, how much is used, when it resets. Null below the line.
 const hot = atom({ plugin: 'effortless', key: 'hot' } as const, null)
@@ -585,15 +585,56 @@ async function jevKey($: EngineInterface): Promise<string | undefined> {
 type Judged = { verdict?: Pick; tokens: number }
 
 /** Why a judge the person picked could not answer, in words: what a status code means for them. */
-export function judgeFailure(name: string, status: number | 'timeout'): string {
+export function judgeFailure(name: string, status: number | 'timeout', body?: string, secret?: string): string {
   if (status === 'timeout') return `${name} did not answer in time`
-  if (status === 401 || status === 403) return `${name} rejected the key (${status})`
-  if (status === 402) return `${name} is out of credits (${status})`
-  if (status === 429) return `${name} is rate limited (${status})`
-  return `${name} failed (${status})`
+  const said = failureMessage(body, secret)
+  const why = said ? `: ${said}` : ''
+  if (status === 401 || status === 403) return `${name} rejected the key (${status})${why}`
+  if (status === 402) return `${name} is out of credits (${status})${why}`
+  if (status === 429) return `${name} is rate limited (${status})${why}`
+  return `${name} failed (${status})${why}`
+}
+/**
+ * The server's own words in a JSON error body ({"detail": "…"}, {"detail": {"message": "…"}} or
+ * {"error": {"message": "…"}}), on one short line. Anything else (an HTML page, plain text, a list of
+ * validation errors) says nothing, so a proxy's page never lands in a toast. The key is masked in case
+ * the server echoes it.
+ */
+export function failureMessage(body: string | undefined, secret?: string): string | undefined {
+  let json: unknown
+  try {
+    json = JSON.parse(body ?? '')
+  } catch {
+    return undefined
+  }
+  const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined)
+  const root = obj(json)
+  for (const text of [root?.detail, obj(root?.detail)?.message, obj(root?.error)?.message]) {
+    if (typeof text !== 'string') continue
+    // Control, zero-width and direction marks would garble the toast and the band.
+    let line = text
+      .replace(/[\u0000-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁯﻿]+|[\u{e0000}-\u{e007f}]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[.。]+$/, '')
+    // A key too short to be a real one would mask ordinary letters ("k" in "Unknown").
+    if (secret && secret.length >= 8) line = line.split(secret).join('…')
+    if (!line) continue
+    const chars = Array.from(line)
+    return chars.length > 120 ? `${chars.slice(0, 119).join('')}…` : line
+  }
+  return undefined
+}
+/**
+ * What a judge failure is, without the server's words: "Jev failed (400)" for "Jev failed (400): Unknown model".
+ * The toast and the closed band go by this, so a server line that changes each time (a retry delay, a request id)
+ * does not toast on every prompt or bring a closed band back.
+ */
+export function failureKind(reason: string): string {
+  return reason.split(': ')[0]
 }
 const warned = new Set<string>()
-/** Tells the person once per session and reason that their judge failed and Haiku stands in. */
+/** Tells the person once per session and kind of failure that their judge failed and Haiku stands in. */
 function warnJudge($: EngineInterface, reason: string) {
   // A test from the settings panel takes the reason for its own line, with no toast and no judge-down band.
   if (judgeTesting) {
@@ -602,8 +643,8 @@ function warnJudge($: EngineInterface, reason: string) {
   }
   void proof($, `judge fallback: ${reason}`)
   void update($, judgeDown, () => reason).then(() => $.ui.invalidate('ui.render'))
-  if (warned.has(reason)) return
-  warned.add(reason)
+  if (warned.has(failureKind(reason))) return
+  warned.add(failureKind(reason))
   $.ui.toast(`effortless: ${reason}. Haiku judges for now.`)
 }
 
@@ -765,7 +806,7 @@ async function askJev($: EngineInterface, key: string, prompt: string, current: 
         throw new Error('jev timeout')
       }),
     ])
-    if (!res.ok) warnJudge($, judgeFailure('Jev', res.status))
+    if (!res.ok) warnJudge($, judgeFailure('Jev', res.status, res.text, key))
     const verdict = res.ok ? parseJevAnswer(res.text, current) : undefined
     if (verdict) {
       let used = 0
@@ -5848,7 +5889,8 @@ Saved to ${out}.md and .json` }
     }
     // The judge the person picked is failing: Haiku stands in until it works again.
     const downReason = await read($, judgeDown)
-    if (downReason && !config.hide.includes('down') && downReason !== (await read($, judgeDownHidden))) {
+    const closedFor = await read($, judgeDownHidden)
+    if (downReason && !config.hide.includes('down') && (!closedFor || failureKind(downReason) !== failureKind(closedFor))) {
       if (e.surface === 'terminal')
         return terminalBand($, e, {
           key: 'down', kind: 'down', color: SLATE, bg: SLATE_BG, edge: SLATE_EDGE, title: 'Judge down',

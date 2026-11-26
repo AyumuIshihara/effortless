@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ, longPromptFactor, helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntry, chatEntryOf, asUpdatedEntries, updatedFor, withUpdated, mayCopyIntoRunning, skipsReload, scopeArgs, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
+import { routeTo, asOffered, modelArg, MODEL_PRICE, MODEL_READ, longPromptFactor, helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, sameFolder, ownEntry, chatEntryOf, asUpdatedEntries, updatedFor, withUpdated, mayCopyIntoRunning, skipsReload, scopeArgs, folderOf, tipped, bounded, ceilingFor, modelCapped, helperCapped, loosestCeiling, heldToModel, judgedWhy, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, failureMessage, failureKind, contextFrom, userText, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, marketplaceFromRoot, drawLine, drawLogged, updateLine, logDirOf, logFileOf, namedLines, renderLogName, timingLogName, newTimingBuffer, pushTiming } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -1813,6 +1813,104 @@ describe('judge failures are said', () => {
     expect(judgeFailure('Jev', 429)).toContain('rate limited')
     expect(judgeFailure('Jev', 401)).toContain('rejected the key')
     expect(judgeFailure('Jev', 'timeout')).toContain('did not answer')
+  })
+
+  test("judgeFailure adds the server's own reason from a JSON error body, and nothing else", () => {
+    const unknown = '{"detail":{"error_type":"api_usage_error","message":"Unknown model: jev-latest"}}'
+    expect(judgeFailure('Jev', 400, unknown)).toBe('Jev failed (400): Unknown model: jev-latest')
+    expect(judgeFailure('Jev', 404, '{"detail":"Not Found"}')).toBe('Jev failed (404): Not Found')
+    expect(judgeFailure('Jev', 402, '{"error":{"message":"No credits left"}}')).toBe('Jev is out of credits (402): No credits left')
+    expect(judgeFailure('Jev', 402, 'payment required')).toBe('Jev is out of credits (402)')
+    expect(judgeFailure('Jev', 502, '<html><body>Bad gateway</body></html>')).toBe('Jev failed (502)')
+    expect(judgeFailure('Jev', 422, '{"detail":[{"loc":["body"],"msg":"field required"}]}')).toBe('Jev failed (422)')
+    expect(judgeFailure('Jev', 400, '')).toBe('Jev failed (400)')
+    expect(judgeFailure('Jev', 400, '{"detail":"   "}')).toBe('Jev failed (400)')
+    expect(judgeFailure('Jev', 400, 'null')).toBe('Jev failed (400)')
+    expect(judgeFailure('Jev', 'timeout', unknown)).toBe('Jev did not answer in time')
+  })
+
+  test('failureMessage keeps one short line and masks the key', () => {
+    expect(failureMessage('{"detail":"line one\\n\\tline two"}')).toBe('line one line two')
+    expect(failureMessage('{"detail":"bad key sk-12345678 given"}', 'sk-12345678')).toBe('bad key … given')
+    expect(failureMessage('{"detail":"Unknown model"}', 'k')).toBe('Unknown model')
+    expect(failureMessage('{"detail":"bad key 1234567 given"}', '1234567')).toBe('bad key 1234567 given')
+    expect(failureMessage('{"detail":"bad key 12345678 given"}', '12345678')).toBe('bad key … given')
+    const long = failureMessage(JSON.stringify({ detail: 'x'.repeat(500) }))
+    expect(long?.length).toBe(120)
+    expect(long?.endsWith('…')).toBe(true)
+    const emoji = failureMessage(JSON.stringify({ detail: '😀'.repeat(200) }))
+    expect(Array.from(emoji ?? '').length).toBe(120)
+    expect(emoji).toBe('😀'.repeat(119) + '…')
+  })
+
+  test('failureMessage strips marks that garble a line, a trailing stop, and looks past an empty or listed detail', () => {
+    expect(failureMessage(JSON.stringify({ detail: 'a\u009b2Jb​c‮d⁦e' }))).toBe('a 2Jb c d e')
+    expect(failureMessage(JSON.stringify({ detail: 'a؜b⁠c­d\u{e0041}e' }))).toBe('a b c d e')
+    expect(failureMessage(JSON.stringify({ detail: '日本語の文 😀' }))).toBe('日本語の文 😀')
+    expect(failureMessage('{"detail":"Not Found."}')).toBe('Not Found')
+    expect(failureMessage('{"detail":"見つかりません。"}')).toBe('見つかりません')
+    expect(failureMessage('{"detail":"","error":{"message":"Key expired"}}')).toBe('Key expired')
+    expect(failureMessage('{"detail":[{"msg":"x"}],"error":{"message":"Bad body"}}')).toBe('Bad body')
+    expect(failureMessage('{"detail":"First","error":{"message":"Second"}}')).toBe('First')
+    expect(failureMessage('{"detail":{"message":"Inner"},"error":{"message":"Outer"}}')).toBe('Inner')
+    expect(failureMessage('{"detail":"..."}')).toBeUndefined()
+  })
+
+  test('failureKind is the failure without the server words', () => {
+    expect(failureKind('Jev failed (400): Unknown model: jev-latest')).toBe('Jev failed (400)')
+    expect(failureKind('Jev is rate limited (429)')).toBe('Jev is rate limited (429)')
+    expect(failureKind('Jev could not be reached')).toBe('Jev could not be reached')
+  })
+
+  test("Jev's 400: the toast says the server's reason once, even when its words change, and masks the key", async ($, on) => {
+    const key = 'ts-key-0123456789'
+    engine(on, { TYPESAFE_API_KEY: key })
+    mock.clock(on)
+    judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    let calls = 0
+    on('http.fetch', () => {
+      calls++
+      const body = JSON.stringify({ detail: { message: `Unknown model: jev-latest (request ${calls}, key ${key})` } })
+      return { value: { status: 400, ok: false, headers: {}, text: body } }
+    })
+    const said: string[] = []
+    on('ui.toast', (_$, e) => {
+      said.push(String((e as { text?: string }).text ?? e))
+      return { value: undefined } as never
+    })
+    await $.prompt.submit({ text: 'first question here', wait: false, origin: { kind: 'composer' } })
+    await $.prompt.submit({ text: 'second question here', wait: false, origin: { kind: 'composer' } })
+    expect(calls).toBeGreaterThanOrEqual(2)
+    const told = said.filter(t => t.includes('Jev failed (400)'))
+    expect(told).toEqual(['effortless: Jev failed (400): Unknown model: jev-latest (request 1, key …). Haiku judges for now.'])
+    expect(said.join(' ')).not.toContain(key)
+  })
+
+  test('the judge-down band shows the reason; once closed it stays closed for new words, and returns for a new kind', async ($, on) => {
+    engine(on, { TYPESAFE_API_KEY: 'ts-key-0123456789' })
+    mock.clock(on)
+    judgeSays(on, '{"model":"sonnet","effort":"low","why":"x"}')
+    let status = 400
+    let calls = 0
+    on('http.fetch', () => {
+      calls++
+      return { value: { status, ok: false, headers: {}, text: JSON.stringify({ detail: `Unknown model, try ${calls}` }) } }
+    })
+    await $.prompt.submit({ text: 'first question here', wait: false, origin: { kind: 'composer' } })
+    const band = await $.ui.mount(DESK_BAND)
+    if (await band.find({ key: 'setup-haiku' })) {
+      await band.press({ key: 'setup-haiku' })
+      await band.press({ key: 'setup-close' })
+    }
+    expect(await drawn(band)).toContain('Jev failed (400): Unknown model, try 1. Haiku stands in.')
+    await band.press({ key: 'down-close' })
+    await $.prompt.submit({ text: 'second question here', wait: false, origin: { kind: 'composer' } })
+    expect(calls).toBeGreaterThanOrEqual(2)
+    expect(await drawn(band)).not.toContain('Haiku stands in')
+    status = 402
+    await $.prompt.submit({ text: 'third question here', wait: false, origin: { kind: 'composer' } })
+    expect(await drawn(band)).toContain('Jev is out of credits (402): Unknown model, try')
+    await band.unmount()
   })
 
   test('Jev out of credits: the person is told once, and Haiku judges', async ($, on) => {
