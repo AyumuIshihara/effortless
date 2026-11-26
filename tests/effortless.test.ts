@@ -2878,6 +2878,132 @@ describe('settings panel', () => {
     await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
   }
 
+  // Whether the settings panel is what the band above the prompt draws now. Nothing drawn reads as not shown.
+  const panelShown = async ($: Engine) => {
+    let ui
+    try {
+      ui = await $.ui.mount(DESK_BAND)
+    } catch {
+      return false
+    }
+    try {
+      return (await ui.findAll({ type: 'Button' })).some(b => (b as { props?: { key?: string } }).props?.key === 'settings-card-judge')
+    } finally {
+      await ui.unmount()
+    }
+  }
+  const pressFooter = async ($: Engine, key: string) => {
+    const footer = await $.ui.mount(FOOTER)
+    await footer.press({ key })
+    await footer.unmount()
+  }
+  // The engine beneath, with a store that counts the reads of a key and a list of commands that can stop answering.
+  const watched = (on: On) => {
+    // The setup is done already, so the footer offers the settings.
+    const w = { reads: {} as Record<string, number>, listHangs: false, lists: 0, held: { setupDone: true } as Record<string, unknown> }
+    on('store.get', ((_$: unknown, e: { key: string }) => {
+      w.reads[e.key] = (w.reads[e.key] ?? 0) + 1
+      return { value: w.held[e.key] }
+    }) as never)
+    on('store.set', ((_$: unknown, e: { key: string; value: unknown }) => {
+      w.held[e.key] = e.value
+      return { value: undefined }
+    }) as never)
+    mock.env(on, { EFFORTLESS_MODEL_UI: '1' })
+    on('prompt.submit', (_$, e) => ({ text: e.text }))
+    on('ui.status', () => ({ value: undefined }))
+    on('session.messages', () => ({ value: [] }) as never)
+    on('session.model', () => ({ value: 'claude-opus-5-5' }))
+    on('command.list', () => {
+      w.lists += 1
+      return (w.listHangs ? new Promise(() => undefined) : { value: [{ name: 'model' }, { name: 'session-handoff', source: 'user' }] }) as never
+    })
+    return w
+  }
+
+  test('minimal look: the footer button opens the panel without waiting for the list of skills', { options: { layout: 'minimal' }, timeoutMs: 20_000 } as never, async ($, on) => {
+    const w = watched(on)
+    mock.clock(on)
+    await start($, on)
+    // The list of commands never answers from here on.
+    w.listHangs = true
+    const lists = w.lists
+    const pressedAt = Date.now()
+    await pressFooter($, 'settings')
+    expect(await panelShown($)).toBe(true)
+    // Waiting for the list held the press for ten seconds; the list is still asked for.
+    expect(Date.now() - pressedAt).toBeLessThan(5000)
+    expect(w.lists - lists).toBe(1)
+  })
+
+  test('minimal look: a panel closed from the footer stays closed at the next draws', { options: { layout: 'minimal' }, timeoutMs: 20_000 } as never, async ($, on) => {
+    watched(on)
+    mock.clock(on)
+    await start($, on)
+    // Opened and closed with no draw of the band between.
+    await pressFooter($, 'settings')
+    await pressFooter($, 'settings')
+    expect(await panelShown($)).toBe(false)
+    expect(await panelShown($)).toBe(false)
+    // And it opens again when asked.
+    await pressFooter($, 'settings')
+    expect(await panelShown($)).toBe(true)
+  })
+
+  test('the settings request is read at every draw until the chat begins, then only after an ask', { options: { layout: 'minimal' }, timeoutMs: 20_000 } as never, async ($, on) => {
+    const w = watched(on)
+    const clock = mock.clock(on)
+    judgeSays(on, '{"effort":"low","why":"simple"}')
+    const asks = () => w.reads.openSettingsAt ?? 0
+    await start($, on)
+    // Before the first message a request may come from another load of the plugin: each draw looks.
+    let from = asks()
+    for (let i = 0; i < 3; i += 1) expect(await panelShown($)).toBe(false)
+    expect(asks() - from).toBe(3)
+    // One written by another load, for this chat: the next draw clears it, and the panel opens right after that draw
+    // with the list of skills asked for.
+    const lists = w.lists
+    w.held.openSettingsAt = { at: Date.now(), session: '' }
+    await panelShown($)
+    expect(w.held.openSettingsAt).toBe(null)
+    await clock.advance(1)
+    expect(await panelShown($)).toBe(true)
+    expect(w.lists - lists).toBe(1)
+    await pressFooter($, 'settings')
+    expect(await panelShown($)).toBe(false)
+    // One for another chat opens nothing here.
+    w.held.openSettingsAt = { at: Date.now(), session: 'another-chat' }
+    await panelShown($)
+    await clock.advance(1)
+    expect(await panelShown($)).toBe(false)
+    w.held.openSettingsAt = null
+
+    // The chat has begun: the draws that follow do not ask.
+    await $.prompt.submit({ text: 'hej', wait: false, origin: { kind: 'composer' } })
+    await panelShown($)
+    from = asks()
+    for (let i = 0; i < 5; i += 1) await panelShown($)
+    expect(asks() - from).toBe(0)
+    // After the button, once.
+    await pressFooter($, 'settings')
+    from = asks()
+    expect(await panelShown($)).toBe(true)
+    expect(await panelShown($)).toBe(true)
+    expect(asks() - from).toBe(1)
+    expect(w.held.openSettingsAt).toBe(null)
+  })
+
+  test('the saved card is looked for in the store only shortly after a load or a save', { options: { layout: 'minimal' }, timeoutMs: 20_000 } as never, async ($, on) => {
+    const w = watched(on)
+    mock.clock(on)
+    const asks = () => w.reads.settingsSavedAt ?? 0
+    await start($, on)
+    // Right after the load: looked for.
+    const from = asks()
+    await panelShown($)
+    expect(asks() - from).toBe(1)
+  })
+
   test('the slider tips only close calls; floor and ceiling clamp; the key line is set in place', () => {
     expect(tipped('medium', 0.6, 1)).toBe('high')
     expect(tipped('medium', 0.9, 1)).toBe('medium')

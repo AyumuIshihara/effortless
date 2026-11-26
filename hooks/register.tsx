@@ -1876,16 +1876,35 @@ async function loadInstalledSkills($: EngineInterface) {
   await update($, installedSkills, () => names)
 }
 
+/** Opens the panel in this load: the panel first, as the list of skills may take seconds; its write to the state draws
+ *  the panel again once it is in. */
+async function openPluginSettingsHere($: EngineInterface) {
+  await update($, settingsOpen, () => true)
+  $.ui.invalidate('ui.render')
+  void loadInstalledSkills($).catch(() => undefined)
+}
+
 /** Opens the effortless settings panel above the prompt: the app does not let a plugin open its /plugin dialog. */
 async function openPluginSettings($: EngineInterface) {
-  await loadInstalledSkills($)
-  await update($, settingsOpen, () => true)
+  await openPluginSettingsHere($)
   // Before a chat's first message the app may start the mod's session afresh for each command, and the state with
   // it: the request also goes to the store, which outlives that, and the next drawing picks it up.
   // The store is shared by every chat, so the request names this one: another chat must not open its panel too.
   await $.store.set('openSettingsAt', { at: Date.now(), session: await $.session.id().catch(() => '') })
+  settingsAskPending = true
   $.ui.invalidate('ui.render')
 }
+// Whether the next draw asks the store for a settings request, and when it last did (performance.now()).
+let settingsAskPending = true
+let settingsAskedAt = Number.NEGATIVE_INFINITY
+const SETTINGS_ASK_MS = 15_000
+// Whether this load has seen a prompt or a request of the chat. Before a chat's first message the app may run each
+// command in a session of its own, so a request another load wrote is looked for at every draw until then.
+let chatBegun = false
+// When this load saved the settings (Date.now()), for the card that says so.
+let savedHereAt = 0
+// The "Settings saved" card is looked for in the store this long after a load or a save: the save reloads the plugin.
+const SAVED_ASK_MS = 10_000
 
 /** The settings rows the panel changes, by field: saved as the plugin's own setting and used at once. */
 // Small purple marks beside the settings rows' titles: text glyphs, which draw wherever text does (an Svg there did not).
@@ -1978,6 +1997,7 @@ async function saveDraft($: EngineInterface) {
   await update($, settingsOpen, () => false)
   // Said by a card above the prompt, not a toast. Kept in the store: each setting written reloads the plugin.
   await $.store.set('settingsSavedAt', await $.clock.now().catch(() => Date.now()))
+  savedHereAt = Date.now()
   $.ui.invalidate('ui.render')
   await $.store.set('setupSave', changes)
   await drainSetupSave($)
@@ -4389,6 +4409,10 @@ async function haikuHandoff($: EngineInterface, messages: Parameters<typeof comp
 export const register: Register = (on, options) => {
   loadedAt = Date.now()
   firstDrawLogged = false
+  settingsAskPending = true
+  settingsAskedAt = Number.NEGATIVE_INFINITY
+  chatBegun = false
+  savedHereAt = 0
   // A load starts its logs over: the chat is not known until a session start or the id is asked for.
   loadedSession = '-'
   sessionAsk = undefined
@@ -4431,6 +4455,8 @@ export const register: Register = (on, options) => {
   })
   on('session.start', async ($, e, next) => {
     sessionStarted = Date.now()
+    // A start may come for each command before a chat's first message: the request it left is read at the next draw.
+    settingsAskPending = true
     // Everything the first draw needs, asked for at once: one after the other they held the start (and with it the
     // band) for a second or more. What the draw does not need runs after, unawaited.
     const [sid, kept, kff, storedAuto, storedAutoModel, storedPick, setupDone] = await Promise.all([
@@ -4692,6 +4718,7 @@ Saved to ${out}.md and .json` }
   })
 
   on('prompt.submit', async ($, e, next) => {
+    chatBegun = true
     await setTurnBusy($, true)
     turnCost = 0
     // A landed handoff's card goes once the next message is sent.
@@ -5222,7 +5249,21 @@ Saved to ${out}.md and .json` }
       return (handed = next(e))
     }
     const askStartedAt = performance.now()
-    const asked = await $.store.get('openSettingsAt')
+    // The store is asked at every draw until the chat begins; after that only where a request may be waiting: one this
+    // load made, the first draw of a load, and else every SETTINGS_ASK_MS.
+    const isAskDue = !chatBegun || settingsAskPending || askStartedAt - settingsAskedAt >= SETTINGS_ASK_MS
+    let asked: unknown = null
+    if (isAskDue) {
+      settingsAskPending = false
+      settingsAskedAt = askStartedAt
+      try {
+        asked = await $.store.get('openSettingsAt')
+      } catch (error) {
+        // Unread: asked again at the next draw, and the draw fails as it did.
+        settingsAskPending = true
+        throw error
+      }
+    }
     const askedHere =
       asked && typeof asked === 'object' && (asked as { session?: string }).session === (await $.session.id().catch(() => ''))
         ? (asked as { at: number }).at
@@ -5230,7 +5271,9 @@ Saved to ${out}.md and .json` }
     askMs = performance.now() - askStartedAt
     if (typeof askedHere === 'number') {
       await $.store.set('openSettingsAt', null)
-      if (Date.now() - askedHere < 60_000 && !(await read($, settingsOpen))) await update($, settingsOpen, () => true)
+      // The state cannot be written while a draw is on: the panel is opened right after it, and that write draws it.
+      if (Date.now() - askedHere < 60_000 && !(await read($, settingsOpen)))
+        $.clock.after(0, () => void openPluginSettingsHere($).catch(() => undefined))
     }
     lastRenderBranch = (await read($, settingsOpen)) ? 'drew the settings panel' : 'drew a band or nothing'
     const { Box, Text, Button, Svg, Link } = themedEls($.ui.resolve(e))
@@ -5968,7 +6011,8 @@ Saved to ${out}.md and .json` }
     // A handoff or compact running or just done: said above the prompt, where it is seen at once.
     // A new version: offered, updating, or just updated (gone after UPDATED_CARD_MS or ✕). Desktop only; the terminal
     // has /effortless update.
-    const savedAt = (await $.store.get('settingsSavedAt').catch(() => null)) as number | null
+    const mayBeSaved = Date.now() - loadedAt < SAVED_ASK_MS || Date.now() - savedHereAt < SAVED_ASK_MS
+    const savedAt = mayBeSaved ? ((await $.store.get('settingsSavedAt').catch(() => null)) as number | null) : null
     if (typeof savedAt === 'number') {
       const since = (await $.clock.now().catch(() => Date.now())) - savedAt
       if (since >= 0 && since < SAVED_CARD_MS) {
